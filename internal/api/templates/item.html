@@ -1,8 +1,10 @@
-{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.ColID}}</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}/items">Items</a> / {{.FeatureID}}{{end}}
 {{template "head" .}}
 {{template "nav" .}}
 
 <main class="container">
+  <div class="breadcrumb mb-1">
+    <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.ColID}}</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}/items">Items</a> / {{.FeatureID}}
+  </div>
   <div class="row">
     <div class="col-lg-8">
       <div class="card mb-4">
