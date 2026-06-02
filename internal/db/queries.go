@@ -101,22 +101,36 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
+	// Detect whether geometry column is already a native GEOMETRY type (no WKB cast needed).
+	if t, ok := nameSet[col.GeomColumn]; ok {
+		col.GeomIsNative = strings.HasPrefix(strings.ToUpper(t), "GEOMETRY")
+	}
+
 	return nil
+}
+
+// geomExpr returns the SQL expression that produces a DuckDB GEOMETRY value from the geometry column.
+// Native GEOMETRY columns need no wrapper; WKB BLOB columns require ST_GeomFromWKB().
+func geomExpr(col *config.CollectionConfig) string {
+	if col.GeomIsNative {
+		return col.GeomColumn
+	}
+	return fmt.Sprintf("ST_GeomFromWKB(%s)", col.GeomColumn)
 }
 
 // CacheExtent computes and stores the spatial extent of the collection's parquet file.
 // Called once at startup; extent is stored on the CollectionConfig pointer.
 func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, bucket string) error {
 	purl := parquetURL(bucket, col.ParquetKey)
-	geom := col.GeomColumn
+	g := geomExpr(col)
 	query := fmt.Sprintf(`
 		SELECT
-			MIN(ST_XMin(ST_Envelope(ST_GeomFromWKB(%s)))),
-			MIN(ST_YMin(ST_Envelope(ST_GeomFromWKB(%s)))),
-			MAX(ST_XMax(ST_Envelope(ST_GeomFromWKB(%s)))),
-			MAX(ST_YMax(ST_Envelope(ST_GeomFromWKB(%s))))
+			MIN(ST_XMin(ST_Envelope(%s))),
+			MIN(ST_YMin(ST_Envelope(%s))),
+			MAX(ST_XMax(ST_Envelope(%s))),
+			MAX(ST_YMax(ST_Envelope(%s)))
 		FROM read_parquet('%s')
-	`, geom, geom, geom, geom, purl)
+	`, g, g, g, g, purl)
 
 	row := s.db.QueryRowContext(ctx, query)
 	var minX, minY, maxX, maxY sql.NullFloat64
@@ -218,11 +232,12 @@ type Feature struct {
 func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, limit, offset int, bbox *[4]float64) ([]Feature, int64, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
 
+	g := geomExpr(col)
 	where := ""
 	if bbox != nil {
 		where = fmt.Sprintf(
-			"WHERE ST_Intersects(ST_GeomFromWKB(%s), ST_MakeEnvelope(%f, %f, %f, %f))",
-			col.GeomColumn, bbox[0], bbox[1], bbox[2], bbox[3],
+			"WHERE ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
+			g, bbox[0], bbox[1], bbox[2], bbox[3],
 		)
 	}
 
@@ -236,12 +251,12 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
-			ST_AsGeoJSON(ST_GeomFromWKB(%s))::VARCHAR AS geometry,
+			ST_AsGeoJSON(%s)::VARCHAR AS geometry,
 			* EXCLUDE (%s, %s)
 		FROM read_parquet('%s')
 		%s
 		LIMIT %d OFFSET %d
-	`, col.IDColumn, col.GeomColumn, col.GeomColumn, col.IDColumn, purl, where, limit, offset)
+	`, col.IDColumn, g, col.GeomColumn, col.IDColumn, purl, where, limit, offset)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -282,15 +297,16 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 // Returns (nil, nil) when the feature is not found.
 func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID string) (*Feature, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
+	g := geomExpr(col)
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
-			ST_AsGeoJSON(ST_GeomFromWKB(%s))::VARCHAR AS geometry,
+			ST_AsGeoJSON(%s)::VARCHAR AS geometry,
 			* EXCLUDE (%s, %s)
 		FROM read_parquet('%s')
 		WHERE CAST(%s AS VARCHAR) = '%s'
 		LIMIT 1
-	`, col.IDColumn, col.GeomColumn, col.GeomColumn, col.IDColumn, purl, col.IDColumn, featureID)
+	`, col.IDColumn, g, col.GeomColumn, col.IDColumn, purl, col.IDColumn, featureID)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {

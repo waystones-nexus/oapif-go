@@ -22,6 +22,9 @@ type CollectionConfig struct {
 	CRS         string                    `json:"crs"`
 	Extent      [4]float64
 	Queryables  map[string]QueryableField
+	// GeomIsNative is true when the geometry column is already a DuckDB GEOMETRY type
+	// (no ST_GeomFromWKB wrapper needed). Set by DetectColumns at startup.
+	GeomIsNative bool
 }
 
 type Config struct {
