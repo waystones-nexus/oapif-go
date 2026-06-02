@@ -51,6 +51,7 @@
 {{template "scripts-base" .}}
 {{if .BboxJS}}
 <script>
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
 var mergedBbox = {{.BboxJS}};
 var colData = {{.CollectionsDataJS}};
 var baseURL = '{{.BaseURL}}';
@@ -78,10 +79,10 @@ map.on('load', function() {
 
   map.addSource('collections', {type: 'geojson', data: {type: 'FeatureCollection', features: features}});
   map.addLayer({id: 'col-fill', type: 'fill', source: 'collections',
-    paint: {'fill-color': '#4338ca',
+    paint: {'fill-color': brandColor,
       'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.35, 0.1]}});
   map.addLayer({id: 'col-line', type: 'line', source: 'collections',
-    paint: {'line-color': '#4338ca', 'line-width': 2}});
+    paint: {'line-color': brandColor, 'line-width': 2}});
 
   var hoveredId = null;
   map.on('mousemove', 'col-fill', function(e) {

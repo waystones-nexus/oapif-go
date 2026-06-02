@@ -37,6 +37,7 @@
 {{template "scripts-base" .}}
 {{if .BboxJS}}
 <script>
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
 var bbox = {{.BboxJS}};
 var map = new maplibregl.Map({
   container: 'map',
@@ -49,8 +50,8 @@ map.on('load', function() {
   map.addSource('extent', {type: 'geojson', data: {type: 'Feature', geometry: {
     type: 'Polygon', coordinates: [[[bbox[0],bbox[1]],[bbox[2],bbox[1]],[bbox[2],bbox[3]],[bbox[0],bbox[3]],[bbox[0],bbox[1]]]]
   }, properties: {}}});
-  map.addLayer({id: 'ext-fill', type: 'fill', source: 'extent', paint: {'fill-color': '#4338ca', 'fill-opacity': 0.1}});
-  map.addLayer({id: 'ext-line', type: 'line', source: 'extent', paint: {'line-color': '#4338ca', 'line-width': 2}});
+  map.addLayer({id: 'ext-fill', type: 'fill', source: 'extent', paint: {'fill-color': brandColor, 'fill-opacity': 0.1}});
+  map.addLayer({id: 'ext-line', type: 'line', source: 'extent', paint: {'line-color': brandColor, 'line-width': 2}});
 });
 </script>
 {{end}}

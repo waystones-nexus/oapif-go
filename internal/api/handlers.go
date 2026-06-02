@@ -106,6 +106,22 @@ func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handl
 			lower := strings.ToLower(key)
 			return strings.HasPrefix(lower, "bbox_")
 		},
+		// brandStyle returns a CSS :root override block when a custom brand color is set.
+		// Returns empty HTML when the color matches the default, so the base stylesheet handles it.
+		"brandStyle": func() template.CSS {
+			b := cfg.Brand
+			if b.Color == "" || b.Color == config.DefaultBrandColor {
+				return ""
+			}
+			return template.CSS(fmt.Sprintf(
+				":root{--brand:%s;--brand-dark:%s;--brand-light:%s;--brand-border:%s}",
+				b.Color, b.ColorDark, b.ColorLight, b.ColorBorder,
+			))
+		},
+		// faviconURL returns a custom favicon URL when branding provides one, otherwise "".
+		"faviconURL": func() string {
+			return cfg.Brand.FaviconURL
+		},
 	}
 	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{

@@ -43,6 +43,7 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
 // Prev/next from URL params passed by items table
 (function() {
   var params = new URLSearchParams(window.location.search);
@@ -75,13 +76,13 @@ if (feature && feature.geometry) {
     map.addSource('feature', {type: 'geojson', data: feature});
     map.addLayer({id: 'f-fill', type: 'fill', source: 'feature',
       filter: ['==', '$type', 'Polygon'],
-      paint: {'fill-color': '#4338ca', 'fill-opacity': 0.3}});
+      paint: {'fill-color': brandColor, 'fill-opacity': 0.3}});
     map.addLayer({id: 'f-line', type: 'line', source: 'feature',
       filter: ['in', '$type', 'Polygon', 'LineString'],
-      paint: {'line-color': '#4338ca', 'line-width': 2}});
+      paint: {'line-color': brandColor, 'line-width': 2}});
     map.addLayer({id: 'f-circle', type: 'circle', source: 'feature',
       filter: ['==', '$type', 'Point'],
-      paint: {'circle-color': '#4338ca', 'circle-radius': 8, 'circle-opacity': 0.7,
+      paint: {'circle-color': brandColor, 'circle-radius': 8, 'circle-opacity': 0.7,
               'circle-stroke-width': 2, 'circle-stroke-color': '#fff'}});
     var coords = [];
     function flatCoords(c) { if (typeof c[0] === 'number') { coords.push(c); } else { c.forEach(flatCoords); } }

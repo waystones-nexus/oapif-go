@@ -87,6 +87,7 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
 var map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/positron',
@@ -115,20 +116,58 @@ if (features && features.length > 0) {
     return {type: 'Feature', id: i, geometry: f.geometry, properties: Object.assign({}, f.properties)};
   })};
 
+  // Centroid points for polygon/linestring features — shown at low zoom where
+  // the actual polygon fills are too small to see.
+  var centroidFeats = [];
+  features.forEach(function(f, i) {
+    if (!f.geometry) return;
+    var t = f.geometry.type;
+    if (t !== 'Polygon' && t !== 'MultiPolygon' && t !== 'LineString' && t !== 'MultiLineString') return;
+    var coords = [];
+    function flatC(c) { if (typeof c[0] === 'number') coords.push(c); else c.forEach(flatC); }
+    flatC(f.geometry.coordinates);
+    if (!coords.length) return;
+    var lngs = coords.map(function(c) { return c[0]; });
+    var lats = coords.map(function(c) { return c[1]; });
+    centroidFeats.push({type:'Feature', id:i, geometry:{type:'Point', coordinates:[
+      (Math.min.apply(null,lngs) + Math.max.apply(null,lngs)) / 2,
+      (Math.min.apply(null,lats) + Math.max.apply(null,lats)) / 2
+    ]}, properties:{}});
+  });
+  var centroidsFC = {type:'FeatureCollection', features: centroidFeats};
+
   map.on('load', function() {
     map.addSource('features', {type: 'geojson', data: fc});
     map.addLayer({id: 'feat-fill', type: 'fill', source: 'features',
       filter: ['==', '$type', 'Polygon'],
-      paint: {'fill-color': '#4338ca',
-        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.55, 0.35]}});
+      paint: {'fill-color': brandColor,
+        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.6,
+          // Slightly more opaque at low zoom so small polygons are at least faintly visible
+          ['interpolate', ['linear'], ['zoom'], 4, 0.5, 10, 0.35]]}});
     map.addLayer({id: 'feat-line', type: 'line', source: 'features',
       filter: ['in', '$type', 'Polygon', 'LineString'],
-      paint: {'line-color': '#4338ca', 'line-width': 2.5}});
+      paint: {'line-color': brandColor,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1.5, 10, 2.5]}});
     map.addLayer({id: 'feat-circle', type: 'circle', source: 'features',
       filter: ['==', '$type', 'Point'],
-      paint: {'circle-color': '#4338ca',
+      paint: {'circle-color': brandColor,
         'circle-radius': ['case', ['boolean', ['feature-state', 'hover'], false], 8, 6],
         'circle-opacity': 0.75, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff'}});
+
+    // Centroid dot layer — visible at low zoom, fades out at zoom ≥ 12 where
+    // the polygon outlines are large enough to read without the dot markers.
+    if (centroidsFC.features.length > 0) {
+      map.addSource('centroids', {type:'geojson', data: centroidsFC});
+      map.addLayer({id:'feat-centroid', type:'circle', source:'centroids',
+        paint:{
+          'circle-color': brandColor,
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 2, 8, 4, 11, 5],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 12, 0],
+          'circle-stroke-width': 1, 'circle-stroke-color': '#fff',
+          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 12, 0]
+        }
+      });
+    }
 
     if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
 
@@ -138,6 +177,15 @@ if (features && features.length > 0) {
 
     function clearHover() {
       if (hoveredId !== null) { map.setFeatureState({source: 'features', id: hoveredId}, {hover: false}); hoveredId = null; }
+    }
+    // Centroid click shows the panel (same feature as the underlying polygon)
+    if (centroidsFC.features.length > 0) {
+      map.on('click', 'feat-centroid', function(e) {
+        var origF = features[e.features[0].id];
+        if (origF) showPanel(origF);
+      });
+      map.on('mousemove', 'feat-centroid', function() { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'feat-centroid', function() { if (!drawMode) map.getCanvas().style.cursor = ''; });
     }
     ['feat-fill', 'feat-line', 'feat-circle'].forEach(function(lid) {
       map.on('click', lid, function(e) {
