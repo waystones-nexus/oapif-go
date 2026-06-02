@@ -1,0 +1,31 @@
+{{template "head" .}}
+{{template "nav" .}}
+
+<main class="container">
+  <div class="breadcrumb mb-1">
+    <a href="{{.BaseURL}}">Home</a> / Conformance
+  </div>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Conformance</h2>
+    <a href="{{.BaseURL}}/conformance?f=json" class="btn btn-json">JSON</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Conformance classes</div>
+    <div class="card-body p-0">
+      <table class="table mb-0">
+        <thead><tr><th>URI</th></tr></thead>
+        <tbody>
+          {{range .ConformsTo}}
+          <tr><td><a href="{{.}}" target="_blank" rel="noopener">{{.}}</a></td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+{{template "footer" .}}
+{{template "scripts-base" .}}
+</body>
+</html>

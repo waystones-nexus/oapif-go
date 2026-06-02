@@ -56,6 +56,9 @@ type CollectionConfig struct {
 	BboxColsStyle string
 	// DatetimeColumn is set by DetectColumns; empty if no timestamp column found.
 	DatetimeColumn string
+	// FeatureCount is the total row count loaded from the sidecar (0 = not cached).
+	// Used by QueryItems to skip the COUNT(*) query on unfiltered requests.
+	FeatureCount int64
 }
 
 type Config struct {

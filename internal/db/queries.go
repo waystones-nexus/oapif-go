@@ -354,9 +354,13 @@ func duckTypeToSchema(t string) config.QueryableField {
 }
 
 // Warmup runs a lightweight COUNT against each collection to prime DuckDB's R2 connection
-// and parquet metadata cache before the HTTP server starts.
+// and parquet metadata cache before the HTTP server starts. Collections whose feature count
+// was loaded from a sidecar already exercised the S3 connection and are skipped.
 func (s *Store) Warmup(ctx context.Context, cols []config.CollectionConfig, bucket string) error {
 	for _, col := range cols {
+		if col.FeatureCount > 0 {
+			continue // sidecar read already primed the S3 connection
+		}
 		var count int64
 		err := s.db.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') LIMIT 1", parquetURL(bucket, col.ParquetKey)),
@@ -445,11 +449,16 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	}
 
 	var total int64
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') %s", purl, where),
-		whereArgs...,
-	).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count: %w", err)
+	hasFilter := opts.Bbox != nil || opts.Datetime != nil || (opts.Filter != nil && opts.Filter.SQL != "")
+	if col.FeatureCount > 0 && !hasFilter {
+		total = col.FeatureCount
+	} else {
+		if err := s.db.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') %s", purl, where),
+			whereArgs...,
+		).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count: %w", err)
+		}
 	}
 
 	// Build EXCLUDE list: geom, id, and any bbox columns (internal; not user-visible).

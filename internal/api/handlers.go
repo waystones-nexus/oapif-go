@@ -101,6 +101,11 @@ func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handl
 			}
 			return parts[len(parts)-1]
 		},
+		// skipProp returns true for internal properties that should not be shown to users.
+		"skipProp": func(key string) bool {
+			lower := strings.ToLower(key)
+			return strings.HasPrefix(lower, "bbox_")
+		},
 	}
 	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{
@@ -160,13 +165,18 @@ func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
-	h.writeJSON(w, http.StatusOK, ConformanceResponse{
-		ConformsTo: []string{
-			"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
-			"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
-			"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
-		},
-	})
+	conforms := []string{
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+	}
+	if acceptsHTML(r) {
+		h.renderHTML(w, "conformance.html", conformanceTmplData{
+			Title: h.cfg.ServerTitle, BaseURL: h.cfg.ServerURL, ConformsTo: conforms,
+		})
+		return
+	}
+	h.writeJSON(w, http.StatusOK, ConformanceResponse{ConformsTo: conforms})
 }
 
 func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
@@ -267,6 +277,13 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 	}
 
 	base := h.cfg.ServerURL
+	if acceptsHTML(r) {
+		h.renderHTML(w, "queryables.html", queryablesTmplData{
+			Title: h.cfg.ServerTitle, BaseURL: base,
+			ColID: col.ID, ColTitle: col.Title, Properties: props,
+		})
+		return
+	}
 	h.writeJSON(w, http.StatusOK, QueryablesResponse{
 		Schema:     "https://json-schema.org/draft/2019-09/schema",
 		ID:         fmt.Sprintf("%s/collections/%s/queryables", base, col.ID),

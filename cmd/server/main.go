@@ -12,6 +12,7 @@ import (
 	"github.com/waystones/oapif-go/internal/db"
 )
 
+
 // startTime is set at package init so it captures process start as early as possible.
 var startTime = time.Now()
 
@@ -37,6 +38,19 @@ func main() {
 
 	for i := range cfg.Collections {
 		c := &cfg.Collections[i]
+		tCol := time.Now()
+
+		sidecar, err := store.TryLoadSidecar(ctx, c.ParquetKey, cfg.S3Bucket)
+		if err != nil {
+			log.Printf("[startup] warn: sidecar for %s: %v", c.ID, err)
+		}
+		if sidecar != nil && sidecar.Version == 1 {
+			db.ApplySidecar(c, sidecar)
+			log.Printf("[startup] %dms - %s: loaded from sidecar (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
+			continue
+		}
+
+		log.Printf("[startup] %s: sidecar not found, computing from parquet", c.ID)
 		if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
 			log.Printf("[startup] warn: detect columns for %s: %v", c.ID, err)
 		}
@@ -46,6 +60,7 @@ func main() {
 		if err := store.CacheQueryables(ctx, c, cfg.S3Bucket); err != nil {
 			log.Printf("[startup] warn: queryables for %s: %v", c.ID, err)
 		}
+		log.Printf("[startup] %dms - %s: computed from parquet (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
 	}
 	logStartup("extents and queryables cached")
 

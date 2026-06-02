@@ -8,15 +8,21 @@
   <div class="row">
     <div class="col-lg-8">
       <div class="card mb-4">
-        <div class="card-header">Feature {{.FeatureID}}</div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Feature {{.FeatureID}}</span>
+          <div class="d-flex gap-2">
+            <a id="prev-item-btn" href="#" class="btn btn-json btn-sm" style="display:none">← Prev</a>
+            <a id="next-item-btn" href="#" class="btn btn-primary btn-sm" style="display:none">Next →</a>
+          </div>
+        </div>
         <div class="card-body">
-          <div id="map" class="mb-4"></div>
+          <div id="map" class="mb-4" style="height:320px"></div>
           <h3>Properties</h3>
           <table class="table table-hover">
             <thead><tr><th>Property</th><th>Value</th></tr></thead>
             <tbody>
               {{range $k, $v := .Feature.Properties}}
-              <tr><td class="fw-semibold">{{$k}}</td><td>{{$v}}</td></tr>
+              {{if not (skipProp $k)}}<tr><td class="fw-semibold">{{$k}}</td><td>{{$v}}</td></tr>{{end}}
               {{end}}
             </tbody>
           </table>
@@ -24,7 +30,9 @@
           <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
           <div class="d-flex gap-2 mt-3">
             <a href="{{.BaseURL}}/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
-            <a href="{{.BaseURL}}/collections/{{.ColID}}/items/{{.FeatureID}}" class="btn btn-json">JSON</a>
+            <a id="prev-item-btn-bottom" href="#" class="btn btn-json" style="display:none">← Prev</a>
+            <a id="next-item-btn-bottom" href="#" class="btn btn-primary" style="display:none">Next →</a>
+            <a href="{{.BaseURL}}/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
           </div>
         </div>
       </div>
@@ -35,6 +43,25 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
+// Prev/next from URL params passed by items table
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var prevId = params.get('prev'), nextId = params.get('next');
+  var colID = '{{.ColID}}';
+  if (prevId) {
+    var href = '/collections/'+colID+'/items/'+prevId;
+    ['prev-item-btn','prev-item-btn-bottom'].forEach(function(id) {
+      var el = document.getElementById(id); el.href = href; el.style.display = '';
+    });
+  }
+  if (nextId) {
+    var href = '/collections/'+colID+'/items/'+nextId;
+    ['next-item-btn','next-item-btn-bottom'].forEach(function(id) {
+      var el = document.getElementById(id); el.href = href; el.style.display = '';
+    });
+  }
+})();
+
 var map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/positron',
@@ -56,11 +83,8 @@ if (feature && feature.geometry) {
       filter: ['==', '$type', 'Point'],
       paint: {'circle-color': '#4338ca', 'circle-radius': 8, 'circle-opacity': 0.7,
               'circle-stroke-width': 2, 'circle-stroke-color': '#fff'}});
-
     var coords = [];
-    function flatCoords(c) {
-      if (typeof c[0] === 'number') { coords.push(c); } else { c.forEach(flatCoords); }
-    }
+    function flatCoords(c) { if (typeof c[0] === 'number') { coords.push(c); } else { c.forEach(flatCoords); } }
     function walkGeom(geom) {
       if (!geom) return;
       if (geom.type === 'GeometryCollection') { geom.geometries.forEach(walkGeom); return; }
@@ -70,8 +94,7 @@ if (feature && feature.geometry) {
     if (coords.length > 0) {
       var lngs = coords.map(function(c) { return c[0]; });
       var lats = coords.map(function(c) { return c[1]; });
-      map.fitBounds([[Math.min.apply(null, lngs), Math.min.apply(null, lats)],
-                     [Math.max.apply(null, lngs), Math.max.apply(null, lats)]],
+      map.fitBounds([[Math.min.apply(null,lngs),Math.min.apply(null,lats)],[Math.max.apply(null,lngs),Math.max.apply(null,lats)]],
                     {padding: 60, maxZoom: 14});
     }
   });
