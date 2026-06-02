@@ -4,6 +4,11 @@ FROM caddy:latest AS caddy-bin
 # ── Stage 1: Build Go binary ───────────────────────────────────────────────
 FROM golang:1.24-bookworm AS builder
 
+# go-duckdb bundles DuckDB's C++ source and compiles it via CGO — needs g++.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Pin the go-duckdb version so builds are reproducible.
@@ -14,7 +19,7 @@ COPY go.mod ./
 RUN go get github.com/duckdb/duckdb-go/v2@v2.10503.1 && go mod tidy
 
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o /app/server ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux go build -v -o /app/server ./cmd/server
 
 # ── Stage 2: Pre-bake DuckDB extensions ───────────────────────────────────
 FROM golang:1.24-bookworm AS extensions
