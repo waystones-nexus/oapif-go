@@ -1,8 +1,10 @@
-{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items{{end}}
 {{template "head" .}}
 {{template "nav" .}}
 
 <main class="container">
+  <div class="breadcrumb mb-1">
+    <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items
+  </div>
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">{{.Col.Title}} — Items</h2>
     <div class="d-flex gap-2 align-items-center flex-wrap">
