@@ -5,15 +5,6 @@ services:
       target: minimal
     ports:
       - "5000:5000"
-    environment:
-      PORT: "5000"
-      R2_ENDPOINT: ${R2_ENDPOINT}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
-      R2_BUCKET: ${R2_BUCKET}
-      SERVER_URL: http://localhost:5000
-      COLLECTION_ID: ${COLLECTION_ID:-test}
-      COLLECTION_TITLE: ${COLLECTION_TITLE:-Test Collection}
-      COLLECTION_R2_KEY: ${COLLECTION_R2_KEY}
-      COLLECTION_GEOM_COLUMN: ${COLLECTION_GEOM_COLUMN:-geometry}
-      COLLECTION_ID_COLUMN: ${COLLECTION_ID_COLUMN:-fid}
+    env_file: .env
+    volumes:
+      - ./config.json:/config.json:ro

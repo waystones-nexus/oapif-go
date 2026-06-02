@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
@@ -17,10 +18,9 @@ type Store struct {
 // Open opens an in-memory DuckDB database and loads the spatial and httpfs extensions.
 //
 // SetMaxOpenConns(1) is intentional for this spike: DuckDB's LOAD command is
-// session-scoped, so using a single connection guarantees the extensions loaded here
-// are the ones used by all queries. Concurrency is serialized, which is acceptable
-// for measuring cold-start time. A production implementation would use duckdb.NewConnector
-// to run extension setup on every connection in the pool.
+// session-scoped, so a single connection guarantees the loaded extensions are used by
+// all queries. A production implementation would use duckdb.NewConnector to run
+// extension setup on every connection in the pool.
 func Open(ctx context.Context) (*Store, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -43,21 +43,29 @@ func Open(ctx context.Context) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// ConfigureR2 creates a DuckDB S3 secret for R2 access.
-// Secrets are database-scoped in DuckDB, so one call is sufficient.
-func (s *Store) ConfigureR2(ctx context.Context, cfg *config.Config) error {
-	if cfg.R2AccessKey == "" {
+// ConfigureS3 creates a DuckDB S3 secret for any S3-compatible store.
+// Works with AWS S3, Cloudflare R2, MinIO, or any other S3-compatible endpoint.
+// Secrets are database-scoped in DuckDB so one call is sufficient.
+func (s *Store) ConfigureS3(ctx context.Context, cfg *config.Config) error {
+	if cfg.S3AccessKey == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
-		CREATE OR REPLACE SECRET r2 (
-			TYPE s3,
-			KEY_ID '%s',
-			SECRET '%s',
-			ENDPOINT '%s',
-			REGION 'auto',
-			URL_STYLE 'path'
-		)`, cfg.R2AccessKey, cfg.R2SecretKey, cfg.R2Host))
+
+	var sb strings.Builder
+	sb.WriteString("CREATE OR REPLACE SECRET s3creds (\n\tTYPE s3,\n")
+	fmt.Fprintf(&sb, "\tKEY_ID '%s',\n", cfg.S3AccessKey)
+	fmt.Fprintf(&sb, "\tSECRET '%s',\n", cfg.S3SecretKey)
+	fmt.Fprintf(&sb, "\tREGION '%s'", cfg.S3Region)
+
+	if cfg.S3Host != "" {
+		fmt.Fprintf(&sb, ",\n\tENDPOINT '%s'", cfg.S3Host)
+	}
+	if cfg.S3URLStyle != "" {
+		fmt.Fprintf(&sb, ",\n\tURL_STYLE '%s'", cfg.S3URLStyle)
+	}
+	sb.WriteString("\n)")
+
+	_, err := s.db.ExecContext(ctx, sb.String())
 	return err
 }
 

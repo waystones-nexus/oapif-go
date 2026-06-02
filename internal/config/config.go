@@ -16,7 +16,7 @@ type CollectionConfig struct {
 	ID          string                    `json:"id"`
 	Title       string                    `json:"title"`
 	Description string                    `json:"description"`
-	R2Key       string                    `json:"r2_key"`
+	ParquetKey  string                    `json:"parquet_key"`
 	GeomColumn  string                    `json:"geom_column"`
 	IDColumn    string                    `json:"id_column"`
 	CRS         string                    `json:"crs"`
@@ -26,13 +26,19 @@ type CollectionConfig struct {
 
 type Config struct {
 	Port        string
-	R2Endpoint  string
-	R2Host      string
-	R2AccessKey string
-	R2SecretKey string
-	R2Bucket    string
 	ServerURL   string
 	ServerTitle string
+
+	// S3-compatible storage. S3Endpoint is optional — omit for AWS S3,
+	// set to the full URL for R2, MinIO, or any other S3-compatible store.
+	S3Endpoint  string // e.g. https://<id>.r2.cloudflarestorage.com  (optional)
+	S3Host      string // host extracted from S3Endpoint, used by DuckDB
+	S3AccessKey string
+	S3SecretKey string
+	S3Bucket    string
+	S3Region    string // e.g. "us-east-1" for AWS, "auto" for R2
+	S3URLStyle  string // "path" or "vhost" — defaults based on whether endpoint is set
+
 	Collections []CollectionConfig
 }
 
@@ -41,20 +47,43 @@ type jsonFileConfig struct {
 }
 
 func Load() *Config {
+	// Accept both S3_* (generic) and R2_* (legacy compat) env var names.
 	cfg := &Config{
 		Port:        getEnv("CONTAINER_PORT", getEnv("PORT", "5000")),
-		R2Endpoint:  os.Getenv("R2_ENDPOINT"),
-		R2AccessKey: os.Getenv("R2_ACCESS_KEY_ID"),
-		R2SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2Bucket:    os.Getenv("R2_BUCKET"),
 		ServerURL:   strings.TrimRight(getEnv("SERVER_URL", "http://localhost:5000"), "/"),
 		ServerTitle: getEnv("SERVER_TITLE", "Waystones OGC API Features"),
+
+		S3Endpoint:  getEnv("S3_ENDPOINT", os.Getenv("R2_ENDPOINT")),
+		S3AccessKey: getEnv("S3_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
+		S3SecretKey: getEnv("S3_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
+		S3Bucket:    getEnv("S3_BUCKET", os.Getenv("R2_BUCKET")),
 	}
 
-	if cfg.R2Endpoint != "" {
-		if u, err := url.Parse(cfg.R2Endpoint); err == nil {
-			cfg.R2Host = u.Host
+	// Extract hostname for DuckDB's endpoint parameter (no scheme).
+	if cfg.S3Endpoint != "" {
+		if u, err := url.Parse(cfg.S3Endpoint); err == nil {
+			cfg.S3Host = u.Host
 		}
+	}
+
+	// Region: default to "auto" when using a custom endpoint (R2/MinIO),
+	// "us-east-1" for standard AWS S3.
+	if r := getEnv("S3_REGION", ""); r != "" {
+		cfg.S3Region = r
+	} else if cfg.S3Host != "" {
+		cfg.S3Region = "auto"
+	} else {
+		cfg.S3Region = "us-east-1"
+	}
+
+	// URL style: path-style for custom endpoints (required by R2/MinIO),
+	// virtual-host style for standard AWS S3.
+	if s := getEnv("S3_URL_STYLE", ""); s != "" {
+		cfg.S3URLStyle = s
+	} else if cfg.S3Host != "" {
+		cfg.S3URLStyle = "path"
+	} else {
+		cfg.S3URLStyle = "vhost"
 	}
 
 	configPath := getEnv("CONFIG_PATH", "./config.json")
@@ -70,7 +99,7 @@ func Load() *Config {
 			cfg.Collections = append(cfg.Collections, CollectionConfig{
 				ID:         id,
 				Title:      getEnv("COLLECTION_TITLE", id),
-				R2Key:      os.Getenv("COLLECTION_R2_KEY"),
+				ParquetKey: getEnv("COLLECTION_PARQUET_KEY", os.Getenv("COLLECTION_R2_KEY")),
 				GeomColumn: getEnv("COLLECTION_GEOM_COLUMN", "geometry"),
 				IDColumn:   getEnv("COLLECTION_ID_COLUMN", "fid"),
 				CRS:        "CRS84",

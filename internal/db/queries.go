@@ -13,7 +13,7 @@ import (
 // CacheExtent computes and stores the spatial extent of the collection's parquet file.
 // Called once at startup; extent is stored on the CollectionConfig pointer.
 func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, bucket string) error {
-	purl := parquetURL(bucket, col.R2Key)
+	purl := parquetURL(bucket, col.ParquetKey)
 	geom := col.GeomColumn
 	query := fmt.Sprintf(`
 		SELECT
@@ -41,7 +41,7 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 // CacheQueryables introspects the parquet schema and stores the field definitions.
 // Called once at startup; queryables are stored on the CollectionConfig pointer.
 func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfig, bucket string) error {
-	purl := parquetURL(bucket, col.R2Key)
+	purl := parquetURL(bucket, col.ParquetKey)
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
 		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl,
 	))
@@ -104,7 +104,7 @@ func (s *Store) Warmup(ctx context.Context, cols []config.CollectionConfig, buck
 	for _, col := range cols {
 		var count int64
 		err := s.db.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') LIMIT 1", parquetURL(bucket, col.R2Key)),
+			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') LIMIT 1", parquetURL(bucket, col.ParquetKey)),
 		).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("warmup %s: %w", col.ID, err)
@@ -122,7 +122,7 @@ type Feature struct {
 
 // QueryItems fetches a paginated, optionally bbox-filtered list of features.
 func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, limit, offset int, bbox *[4]float64) ([]Feature, int64, error) {
-	purl := parquetURL(bucket, col.R2Key)
+	purl := parquetURL(bucket, col.ParquetKey)
 
 	where := ""
 	if bbox != nil {
@@ -187,7 +187,7 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 // QueryItem fetches a single feature by its ID column value.
 // Returns (nil, nil) when the feature is not found.
 func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID string) (*Feature, error) {
-	purl := parquetURL(bucket, col.R2Key)
+	purl := parquetURL(bucket, col.ParquetKey)
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,

@@ -18,23 +18,25 @@ Features runtime and hit **<300ms container cold start** (vs ~1.3s for Python + 
 
 All configuration is via environment variables.
 
-| Variable                  | Required | Default              | Description                                      |
-|---------------------------|----------|----------------------|--------------------------------------------------|
-| `R2_ENDPOINT`             | yes      | —                    | Full R2 endpoint URL, e.g. `https://<id>.r2.cloudflarestorage.com` |
-| `R2_ACCESS_KEY_ID`        | yes      | —                    | R2 access key                                    |
-| `R2_SECRET_ACCESS_KEY`    | yes      | —                    | R2 secret key                                    |
-| `R2_BUCKET`               | yes      | —                    | Bucket name                                      |
-| `SERVER_URL`              | yes      | `http://localhost:5000` | Public base URL used in OGC API self-links    |
-| `PORT` / `CONTAINER_PORT` | no       | `5000`               | HTTP listen port                                 |
-| `SERVER_TITLE`            | no       | `Waystones OGC API Features` | Landing page title                  |
-| `CONFIG_PATH`             | no       | `./config.json`      | Path to multi-collection JSON config             |
+| Variable                    | Required | Default                     | Description                                                   |
+|-----------------------------|----------|-----------------------------|---------------------------------------------------------------|
+| `S3_ACCESS_KEY_ID`          | yes      | —                           | Access key (`R2_ACCESS_KEY_ID` accepted as fallback)          |
+| `S3_SECRET_ACCESS_KEY`      | yes      | —                           | Secret key (`R2_SECRET_ACCESS_KEY` accepted as fallback)      |
+| `S3_BUCKET`                 | yes      | —                           | Bucket name (`R2_BUCKET` accepted as fallback)                |
+| `S3_ENDPOINT`               | no       | —                           | Custom endpoint URL for R2/MinIO/etc. Omit for AWS S3. (`R2_ENDPOINT` accepted as fallback) |
+| `S3_REGION`                 | no       | `auto` / `us-east-1`        | Region. Defaults to `auto` when endpoint is set, `us-east-1` for AWS S3 |
+| `S3_URL_STYLE`              | no       | `path` / `vhost`            | URL style. Defaults to `path` when endpoint is set, `vhost` for AWS S3  |
+| `SERVER_URL`                | yes      | `http://localhost:5000`     | Public base URL used in OGC API self-links                    |
+| `PORT` / `CONTAINER_PORT`   | no       | `5000`                      | HTTP listen port                                              |
+| `SERVER_TITLE`              | no       | `Waystones OGC API Features`| Landing page title                                            |
+| `CONFIG_PATH`               | no       | `./config.json`             | Path to multi-collection JSON config                          |
 
 ### Single collection (env vars)
 
 ```sh
 COLLECTION_ID=my-dataset
 COLLECTION_TITLE="My Dataset"
-COLLECTION_R2_KEY=projects/abc/data.parquet
+COLLECTION_PARQUET_KEY=projects/abc/data.parquet
 COLLECTION_GEOM_COLUMN=geometry   # default
 COLLECTION_ID_COLUMN=fid          # default
 ```
@@ -48,7 +50,7 @@ COLLECTION_ID_COLUMN=fid          # default
       "id": "my-dataset",
       "title": "My Dataset",
       "description": "Optional description",
-      "r2_key": "projects/abc/data.parquet",
+      "parquet_key": "projects/abc/data.parquet",
       "geom_column": "geometry",
       "id_column": "fid",
       "crs": "CRS84"
@@ -66,11 +68,19 @@ COLLECTION_ID_COLUMN=fid          # default
 Create a `.env` file:
 
 ```sh
-R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-R2_ACCESS_KEY_ID=<key>
-R2_SECRET_ACCESS_KEY=<secret>
-R2_BUCKET=my-bucket
-COLLECTION_R2_KEY=path/to/data.parquet
+# Cloudflare R2
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+S3_ACCESS_KEY_ID=<key>
+S3_SECRET_ACCESS_KEY=<secret>
+S3_BUCKET=my-bucket
+
+# AWS S3 (omit S3_ENDPOINT — region and URL style default automatically)
+# S3_ACCESS_KEY_ID=<key>
+# S3_SECRET_ACCESS_KEY=<secret>
+# S3_BUCKET=my-bucket
+# S3_REGION=eu-west-1
+
+COLLECTION_PARQUET_KEY=path/to/data.parquet
 ```
 
 Then:

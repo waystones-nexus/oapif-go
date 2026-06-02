@@ -130,7 +130,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.R2Bucket, limit, offset, bbox)
+	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, limit, offset, bbox)
 	if err != nil {
 		log.Printf("items query error: %v", err)
 		http.Error(w, "query failed", http.StatusInternalServerError)
@@ -170,7 +170,7 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 	}
 	featureID := r.PathValue("featureId")
 
-	f, err := h.store.QueryItem(r.Context(), col, h.cfg.R2Bucket, featureID)
+	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID)
 	if err != nil {
 		log.Printf("item query error: %v", err)
 		http.Error(w, "query failed", http.StatusInternalServerError)
