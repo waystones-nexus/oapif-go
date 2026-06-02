@@ -190,13 +190,15 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	props := make(map[string]map[string]string, len(col.Queryables))
+	props := make(map[string]QueryablePropertySchema, len(col.Queryables))
 	for name, field := range col.Queryables {
-		m := map[string]string{"type": field.Type}
-		if field.Format != "" {
-			m["format"] = field.Format
+		props[name] = QueryablePropertySchema{
+			Type:        field.Type,
+			Format:      field.Format,
+			Title:       field.Title,
+			Description: field.Description,
+			Enum:        field.Enum,
 		}
-		props[name] = m
 	}
 
 	base := h.cfg.ServerURL

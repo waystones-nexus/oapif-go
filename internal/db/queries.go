@@ -300,7 +300,9 @@ func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfi
 	bboxExclude := map[string]bool{
 		"bbox": true, "bbox_xmin": true, "bbox_ymin": true, "bbox_xmax": true, "bbox_ymax": true,
 	}
-	col.Queryables = make(map[string]config.QueryableField)
+	if col.Queryables == nil {
+		col.Queryables = make(map[string]config.QueryableField)
+	}
 	for rows.Next() {
 		vals := make([]interface{}, len(cols))
 		ptrs := make([]interface{}, len(cols))
@@ -315,7 +317,15 @@ func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfi
 		if colName == col.GeomColumn || colName == col.IDColumn || bboxExclude[strings.ToLower(colName)] {
 			continue
 		}
-		col.Queryables[colName] = duckTypeToSchema(colType)
+		// Merge: parquet schema is authoritative for type/format, but preserve
+		// description/title/enum pre-loaded from a model.json if present.
+		newField := duckTypeToSchema(colType)
+		if existing, ok := col.Queryables[colName]; ok {
+			newField.Title = existing.Title
+			newField.Description = existing.Description
+			newField.Enum = existing.Enum
+		}
+		col.Queryables[colName] = newField
 	}
 	return rows.Err()
 }
