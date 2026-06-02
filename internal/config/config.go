@@ -86,9 +86,9 @@ func Load() *Config {
 		ServerURL:   strings.TrimRight(getEnv("SERVER_URL", getEnv("PYGEOAPI_SERVER_URL", "http://localhost:5000")), "/"),
 		ServerTitle: getEnv("SERVER_TITLE", "Waystones OGC API Features"),
 
-		S3Endpoint:  getEnv("S3_ENDPOINT", os.Getenv("R2_ENDPOINT")),
-		S3AccessKey: getEnv("S3_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
-		S3SecretKey: getEnv("S3_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
+		S3Endpoint:  getEnv("S3_ENDPOINT", getEnv("AWS_ENDPOINT_URL", os.Getenv("R2_ENDPOINT"))),
+		S3AccessKey: getEnv("S3_ACCESS_KEY_ID", getEnv("AWS_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID"))),
+		S3SecretKey: getEnv("S3_SECRET_ACCESS_KEY", getEnv("AWS_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY"))),
 		S3Bucket:    getEnv("S3_BUCKET", os.Getenv("R2_BUCKET")),
 	}
 
