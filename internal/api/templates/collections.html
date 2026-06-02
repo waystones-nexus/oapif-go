@@ -1,8 +1,10 @@
-{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / Collections{{end}}
 {{template "head" .}}
 {{template "nav" .}}
 
 <main class="container">
+  <div class="breadcrumb mb-1">
+    <a href="{{.BaseURL}}">Home</a> / Collections
+  </div>
   <h2 class="mb-4">Collections</h2>
   {{range .Collections}}
   <div class="card mb-3">
