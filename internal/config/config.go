@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -28,8 +29,11 @@ func normalizeOGCCRS(s string) string {
 }
 
 type QueryableField struct {
-	Type   string `json:"type"`
-	Format string `json:"format,omitempty"`
+	Type        string   `json:"type"`
+	Format      string   `json:"format,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
 }
 
 type CollectionConfig struct {
@@ -79,7 +83,7 @@ func Load() *Config {
 	// Accept both S3_* (generic) and R2_* (legacy compat) env var names.
 	cfg := &Config{
 		Port:        getEnv("CONTAINER_PORT", getEnv("PORT", "5000")),
-		ServerURL:   strings.TrimRight(getEnv("SERVER_URL", "http://localhost:5000"), "/"),
+		ServerURL:   strings.TrimRight(getEnv("SERVER_URL", getEnv("PYGEOAPI_SERVER_URL", "http://localhost:5000")), "/"),
 		ServerTitle: getEnv("SERVER_TITLE", "Waystones OGC API Features"),
 
 		S3Endpoint:  getEnv("S3_ENDPOINT", os.Getenv("R2_ENDPOINT")),
@@ -120,6 +124,29 @@ func Load() *Config {
 		var jc jsonFileConfig
 		if err := json.Unmarshal(data, &jc); err == nil && len(jc.Collections) > 0 {
 			cfg.Collections = jc.Collections
+		}
+	}
+
+	// COLLECTION_CONFIG_B64: base64-encoded config.json injected by Cloudflare Containers.
+	// Takes effect only when no collections were loaded from the config file.
+	if b64 := os.Getenv("COLLECTION_CONFIG_B64"); b64 != "" && len(cfg.Collections) == 0 {
+		if data, err := base64.StdEncoding.DecodeString(b64); err == nil {
+			var jc jsonFileConfig
+			if err := json.Unmarshal(data, &jc); err == nil && len(jc.Collections) > 0 {
+				cfg.Collections = jc.Collections
+			}
+		}
+	}
+
+	// MODEL_PATH: read a Waystones model.json as an alternative/supplement to config.json.
+	// MODEL_LAYER_KEY_PREFIX provides the S3 path prefix for parquet keys.
+	if modelPath := os.Getenv("MODEL_PATH"); modelPath != "" && len(cfg.Collections) == 0 {
+		keyPrefix := os.Getenv("MODEL_LAYER_KEY_PREFIX")
+		if cols, title, err := loadFromModel(modelPath, keyPrefix); err == nil {
+			cfg.Collections = cols
+			if cfg.ServerTitle == "Waystones OGC API Features" && title != "" {
+				cfg.ServerTitle = title
+			}
 		}
 	}
 

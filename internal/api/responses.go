@@ -58,10 +58,18 @@ type LandingPage struct {
 	Links       []Link `json:"links"`
 }
 
+type QueryablePropertySchema struct {
+	Type        string   `json:"type"`
+	Format      string   `json:"format,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+}
+
 type QueryablesResponse struct {
-	Schema     string                       `json:"$schema"`
-	ID         string                       `json:"$id"`
-	Type       string                       `json:"type"`
-	Title      string                       `json:"title,omitempty"`
-	Properties map[string]map[string]string `json:"properties"`
+	Schema     string                             `json:"$schema"`
+	ID         string                             `json:"$id"`
+	Type       string                             `json:"type"`
+	Title      string                             `json:"title,omitempty"`
+	Properties map[string]QueryablePropertySchema `json:"properties"`
 }
