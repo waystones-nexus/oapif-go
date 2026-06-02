@@ -10,6 +10,100 @@ import (
 	"github.com/waystones/oapif-go/internal/config"
 )
 
+// DetectColumns runs DESCRIBE on the parquet file and, if the configured GeomColumn or IDColumn
+// is absent from the schema, substitutes the first matching candidate. This handles parquet files
+// whose geometry column is "geom", "the_geom", etc. rather than the default "geometry".
+func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig, bucket string) error {
+	purl := parquetURL(bucket, col.ParquetKey)
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
+		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl,
+	))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	descCols, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+
+	type colMeta struct{ name, typ string }
+	var schema []colMeta
+	for rows.Next() {
+		vals := make([]interface{}, len(descCols))
+		ptrs := make([]interface{}, len(descCols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return err
+		}
+		schema = append(schema, colMeta{
+			name: fmt.Sprintf("%v", vals[0]),
+			typ:  fmt.Sprintf("%v", vals[1]),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	nameSet := make(map[string]string, len(schema)) // name → type
+	for _, c := range schema {
+		nameSet[c.name] = c.typ
+	}
+
+	// Auto-detect geometry column if configured name is absent.
+	if _, ok := nameSet[col.GeomColumn]; !ok {
+		for _, candidate := range []string{"geometry", "geom", "the_geom", "wkb_geometry", "shape"} {
+			if _, ok := nameSet[candidate]; ok {
+				col.GeomColumn = candidate
+				break
+			}
+		}
+		// Fall back to first BLOB column.
+		if _, ok := nameSet[col.GeomColumn]; !ok {
+			for _, c := range schema {
+				if strings.ToUpper(c.typ) == "BLOB" {
+					col.GeomColumn = c.name
+					break
+				}
+			}
+		}
+	}
+
+	// Auto-detect ID column if configured name is absent.
+	if _, ok := nameSet[col.IDColumn]; !ok {
+		for _, candidate := range []string{"fid", "id", "gid", "osm_id", "objectid", "feature_id"} {
+			if _, ok := nameSet[candidate]; ok {
+				col.IDColumn = candidate
+				break
+			}
+		}
+		// Fall back to first integer-typed column.
+		if _, ok := nameSet[col.IDColumn]; !ok {
+			for _, c := range schema {
+				t := strings.ToUpper(c.typ)
+				if strings.Contains(t, "INT") {
+					col.IDColumn = c.name
+					break
+				}
+			}
+		}
+		// Last resort: first non-geom column.
+		if _, ok := nameSet[col.IDColumn]; !ok {
+			for _, c := range schema {
+				if c.name != col.GeomColumn {
+					col.IDColumn = c.name
+					break
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // CacheExtent computes and stores the spatial extent of the collection's parquet file.
 // Called once at startup; extent is stored on the CollectionConfig pointer.
 func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, bucket string) error {
@@ -67,7 +161,7 @@ func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfi
 		}
 		colName := fmt.Sprintf("%v", vals[0])
 		colType := fmt.Sprintf("%v", vals[1])
-		if colName == col.GeomColumn {
+		if colName == col.GeomColumn || colName == col.IDColumn {
 			continue
 		}
 		col.Queryables[colName] = duckTypeToSchema(colType)

@@ -37,6 +37,9 @@ func main() {
 
 	for i := range cfg.Collections {
 		c := &cfg.Collections[i]
+		if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
+			log.Printf("[startup] warn: detect columns for %s: %v", c.ID, err)
+		}
 		if err := store.CacheExtent(ctx, c, cfg.S3Bucket); err != nil {
 			log.Printf("[startup] warn: extent for %s: %v", c.ID, err)
 		}
