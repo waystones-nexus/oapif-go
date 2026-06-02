@@ -22,6 +22,12 @@ const (
 	epsg4326URI = "http://www.opengis.net/def/crs/EPSG/0/4326"
 )
 
+type colMapEntry struct {
+	ID    string    `json:"id"`
+	Title string    `json:"title"`
+	Bbox  []float64 `json:"bbox,omitempty"`
+}
+
 var reservedParams = map[string]bool{
 	"limit": true, "offset": true, "bbox": true, "bbox-crs": true,
 	"datetime": true, "filter": true, "filter-lang": true, "crs": true, "f": true,
@@ -87,7 +93,16 @@ func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handl
 	if err != nil {
 		panic("buildOpenAPI: " + err.Error())
 	}
-	tmpls := template.Must(template.ParseFS(templateFS, "templates/*.html"))
+	funcMap := template.FuncMap{
+		"crsLabel": func(uri string) string {
+			parts := strings.Split(uri, "/")
+			if len(parts) == 0 {
+				return uri
+			}
+			return parts[len(parts)-1]
+		},
+	}
+	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{
 		cfg:         cfg,
 		store:       store,
@@ -120,7 +135,16 @@ func (h *Handler) renderHTML(w http.ResponseWriter, name string, data any) {
 func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 	base := h.cfg.ServerURL
 	if acceptsHTML(r) {
-		h.renderHTML(w, "index.html", indexTmplData{Title: h.cfg.ServerTitle, BaseURL: base})
+		h.renderHTML(w, "index.html", indexTmplData{
+			Title:        h.cfg.ServerTitle,
+			BaseURL:      base,
+			Description:  h.cfg.ServerDescription,
+			Provider:     h.cfg.ServerProvider,
+			License:      h.cfg.ServerLicense,
+			Keywords:     h.cfg.ServerKeywords,
+			ContactEmail: h.cfg.ServerContactEmail,
+			ContactName:  h.cfg.ServerContactName,
+		})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, LandingPage{
@@ -152,8 +176,49 @@ func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
 		infos = append(infos, buildCollectionInfo(&h.cfg.Collections[i], base))
 	}
 	if acceptsHTML(r) {
+		var bboxJS template.JS
+		merged := [4]float64{180, 90, -180, -90}
+		hasExtent := false
+		for _, col := range h.cfg.Collections {
+			if col.Extent != ([4]float64{}) {
+				if col.Extent[0] < merged[0] {
+					merged[0] = col.Extent[0]
+				}
+				if col.Extent[1] < merged[1] {
+					merged[1] = col.Extent[1]
+				}
+				if col.Extent[2] > merged[2] {
+					merged[2] = col.Extent[2]
+				}
+				if col.Extent[3] > merged[3] {
+					merged[3] = col.Extent[3]
+				}
+				hasExtent = true
+			}
+		}
+		if hasExtent {
+			bboxJS = template.JS(fmt.Sprintf("[%f,%f,%f,%f]", merged[0], merged[1], merged[2], merged[3]))
+		}
+		var collectionsDataJS template.JS
+		var colEntries []colMapEntry
+		for _, info := range infos {
+			e := colMapEntry{ID: info.ID, Title: info.Title}
+			if info.Extent != nil && info.Extent.Spatial != nil && len(info.Extent.Spatial.Bbox) > 0 && len(info.Extent.Spatial.Bbox[0]) == 4 {
+				b := info.Extent.Spatial.Bbox[0]
+				if b[0] != 0 || b[1] != 0 || b[2] != 0 || b[3] != 0 {
+					e.Bbox = b
+				}
+			}
+			colEntries = append(colEntries, e)
+		}
+		if len(colEntries) > 0 {
+			if d, err := json.Marshal(colEntries); err == nil {
+				collectionsDataJS = template.JS(d)
+			}
+		}
 		h.renderHTML(w, "collections.html", collectionsTmplData{
 			Title: h.cfg.ServerTitle, BaseURL: base, Collections: infos,
+			BboxJS: bboxJS, CollectionsDataJS: collectionsDataJS,
 		})
 		return
 	}
@@ -456,6 +521,7 @@ func buildCollectionInfo(col *config.CollectionConfig, base string) CollectionIn
 		ID:          col.ID,
 		Title:       col.Title,
 		Description: col.Description,
+		Keywords:    col.Keywords,
 		Extent: &Extent{
 			Spatial: &SpatialExtent{
 				Bbox: [][]float64{{col.Extent[0], col.Extent[1], col.Extent[2], col.Extent[3]}},

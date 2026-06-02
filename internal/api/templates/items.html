@@ -5,18 +5,56 @@
   <div class="breadcrumb mb-1">
     <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items
   </div>
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="mb-0">{{.Col.Title}} — Items</h2>
-    <div class="d-flex gap-2 align-items-center flex-wrap">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <h2 class="mb-0">{{.Col.Title}} — Items</h2>
       <span class="text-muted small">{{.Total}} features</span>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
       {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}}</span>{{end}}
       {{if .Datetime}}<span class="brand-chip">datetime: {{.Datetime}}</span>{{end}}
       {{if .Filter}}<span class="brand-chip">filter: {{.Filter}}</span>{{end}}
-      <a href="{{.BaseURL}}/collections/{{.ColID}}/items?limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}" class="btn btn-json">JSON</a>
+      <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
+      <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
+      <label class="d-flex align-items-center gap-1 text-muted small mb-0">
+        Limit
+        <select id="limit-sel" class="form-select form-select-sm d-inline-block" style="width:auto">
+          <option value="10" {{if eq .Limit 10}}selected{{end}}>10</option>
+          <option value="50" {{if eq .Limit 50}}selected{{end}}>50</option>
+          <option value="100" {{if eq .Limit 100}}selected{{end}}>100</option>
+          <option value="500" {{if eq .Limit 500}}selected{{end}}>500</option>
+        </select>
+      </label>
+      <button id="filter-toggle" class="btn btn-json btn-sm">Filter ▾</button>
+      <a href="{{.BaseURL}}/collections/{{.ColID}}/items?limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}" class="btn btn-json">JSON</a>
     </div>
   </div>
 
-  <div id="map" class="mb-4"></div>
+  <div id="filter-panel" class="card mb-3" style="display:none">
+    <div class="card-body" style="padding:1rem 1.25rem">
+      <div class="text-muted small mb-2" style="font-weight:600">Filter by property <span id="queryables-status" class="ms-1 fw-normal"></span></div>
+      <div id="filter-rows" class="d-flex flex-column gap-2 mb-3"></div>
+      <div class="d-flex gap-2 flex-wrap">
+        <button onclick="addFilterRow()" class="btn btn-json btn-sm">+ Add filter</button>
+        <button onclick="applyFilters()" class="btn btn-primary btn-sm">Apply</button>
+        <button onclick="clearFilters()" class="btn btn-json btn-sm">Clear all</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="map" class="mb-3"></div>
+
+  <div id="feat-panel" class="card mb-3" style="display:none;border-color:var(--brand-border)">
+    <div class="card-header d-flex justify-content-between align-items-center" style="padding:0.625rem 1rem;font-size:0.875rem">
+      <span id="panel-id" style="font-weight:700;color:var(--brand)"></span>
+      <button onclick="closePanel()" style="background:none;border:none;cursor:pointer;color:#94a3b8;padding:0;line-height:1;font-size:1.1rem">✕</button>
+    </div>
+    <div class="card-body p-0">
+      <div style="max-height:220px;overflow-y:auto">
+        <table id="panel-table" class="table mb-0" style="font-size:0.82rem"></table>
+      </div>
+    </div>
+  </div>
 
   {{if .FeaturesJSON}}
   <div class="card">
@@ -42,35 +80,245 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
-var map = L.map('map', {preferCanvas: true});
-L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/positron'}).addTo(map);
-map.setView([20, 0], 2);
+var map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/positron',
+  center: [0, 20], zoom: 2
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
 
 var features = {{.FeaturesJSON}};
-if (features && features.length > 0) {
-  var layer = L.geoJSON({type:'FeatureCollection', features: features}, {
-    style: {color: '#4338ca', weight: 2, fillOpacity: 0.3},
-    pointToLayer: function(f, ll) {
-      return L.circleMarker(ll, {radius: 6, color: '#4338ca', fillColor: '#4338ca', fillOpacity: 0.6});
-    },
-    onEachFeature: function(f, l) {
-      l.bindPopup('<strong>ID: ' + (f.id || '') + '</strong>');
-    }
-  }).addTo(map);
-  try { map.fitBounds(layer.getBounds(), {padding: [20,20], maxZoom: 14}); } catch(e) {}
+var featureBounds = null;
+var hoveredId = null;
 
+if (features && features.length > 0) {
+  // Compute bounds
+  var minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  function extendBounds(c) {
+    if (typeof c[0] === 'number') {
+      if (c[0] < minLng) minLng = c[0]; if (c[1] < minLat) minLat = c[1];
+      if (c[0] > maxLng) maxLng = c[0]; if (c[1] > maxLat) maxLat = c[1];
+    } else { c.forEach(extendBounds); }
+  }
+  features.forEach(function(f) { if (f.geometry && f.geometry.coordinates) extendBounds(f.geometry.coordinates); });
+  if (isFinite(minLng)) featureBounds = [[minLng, minLat], [maxLng, maxLat]];
+
+  // Build indexed FeatureCollection for MapLibre feature-state
+  var fc = {type: 'FeatureCollection', features: features.map(function(f, i) {
+    return {type: 'Feature', id: i, geometry: f.geometry, properties: Object.assign({}, f.properties)};
+  })};
+
+  map.on('load', function() {
+    map.addSource('features', {type: 'geojson', data: fc});
+    map.addLayer({id: 'feat-fill', type: 'fill', source: 'features',
+      filter: ['==', '$type', 'Polygon'],
+      paint: {'fill-color': '#4338ca',
+        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.5, 0.3]}});
+    map.addLayer({id: 'feat-line', type: 'line', source: 'features',
+      filter: ['in', '$type', 'Polygon', 'LineString'],
+      paint: {'line-color': '#4338ca', 'line-width': 2}});
+    map.addLayer({id: 'feat-circle', type: 'circle', source: 'features',
+      filter: ['==', '$type', 'Point'],
+      paint: {'circle-color': '#4338ca',
+        'circle-radius': ['case', ['boolean', ['feature-state', 'hover'], false], 8, 6],
+        'circle-opacity': 0.75, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff'}});
+
+    if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
+
+    document.getElementById('use-view-btn').style.display = '';
+    if (featureBounds) document.getElementById('fit-btn').style.display = '';
+
+    function clearHover() {
+      if (hoveredId !== null) { map.setFeatureState({source: 'features', id: hoveredId}, {hover: false}); hoveredId = null; }
+    }
+    ['feat-fill', 'feat-line', 'feat-circle'].forEach(function(lid) {
+      map.on('click', lid, function(e) {
+        var origF = features[e.features[0].id];
+        if (origF) showPanel(origF);
+      });
+      map.on('mousemove', lid, function(e) {
+        if (e.features.length > 0) {
+          clearHover();
+          hoveredId = e.features[0].id;
+          map.setFeatureState({source: 'features', id: hoveredId}, {hover: true});
+        }
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', lid, function() { clearHover(); map.getCanvas().style.cursor = ''; });
+    });
+  });
+
+  // Features table
   var props = Object.keys(features[0].properties || {});
-  var thead = document.getElementById('thead-row');
-  thead.innerHTML = '<th>ID</th>' + props.map(function(p){ return '<th>'+p+'</th>'; }).join('');
-  var tbody = document.getElementById('tbody');
+  document.getElementById('thead-row').innerHTML = '<th>ID</th>' + props.map(function(p){ return '<th>'+p+'</th>'; }).join('');
   var baseURL = '{{.BaseURL}}';
   var colID = '{{.ColID}}';
-  tbody.innerHTML = features.map(function(f) {
-    var cells = props.map(function(p){ var v = f.properties[p]; return '<td>'+(v===null||v===undefined?'':v)+'</td>'; }).join('');
+  document.getElementById('tbody').innerHTML = features.map(function(f) {
+    var cells = props.map(function(p){ var v=f.properties[p]; return '<td>'+(v===null||v===undefined?'':v)+'</td>'; }).join('');
     var id = f.id !== undefined ? f.id : '';
     return '<tr><td><a href="'+baseURL+'/collections/'+colID+'/items/'+id+'">'+id+'</a></td>'+cells+'</tr>';
   }).join('');
 }
+
+// ── Feature panel ─────────────────────────────────────────────────────────────
+function showPanel(f) {
+  var props = f.properties || {};
+  var entries = Object.entries(props).filter(function(e) {
+    return e[1] !== null && e[1] !== '' && e[1] !== undefined;
+  });
+  document.getElementById('panel-id').textContent = 'Feature: ' + (f.id !== undefined ? f.id : '');
+  var rows = entries.map(function(e) {
+    return '<tr><td style="font-weight:600;color:#475569;padding:0.4rem 1rem;white-space:nowrap;vertical-align:top">' + e[0] + '</td>' +
+      '<td style="padding:0.4rem 1rem;word-break:break-word;max-width:220px">' + String(e[1]) + '</td></tr>';
+  }).join('');
+  document.getElementById('panel-table').innerHTML =
+    '<thead><tr>' +
+    '<th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Property</th>' +
+    '<th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Value</th>' +
+    '</tr></thead><tbody>' + (rows || '<tr><td colspan="2" class="text-muted p-3">No properties</td></tr>') + '</tbody>';
+  document.getElementById('feat-panel').style.display = '';
+}
+function closePanel() { document.getElementById('feat-panel').style.display = 'none'; }
+
+// ── Use View button ────────────────────────────────────────────────────────────
+document.getElementById('use-view-btn').onclick = function() {
+  var b = map.getBounds();
+  var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(function(v){ return v.toFixed(6); }).join(',');
+  var url = new URL(window.location.href);
+  url.searchParams.set('bbox', bbox);
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+};
+
+// ── Fit to features ────────────────────────────────────────────────────────────
+document.getElementById('fit-btn').onclick = function() {
+  if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
+};
+
+// ── Limit selector ────────────────────────────────────────────────────────────
+document.getElementById('limit-sel').onchange = function() {
+  var url = new URL(window.location.href);
+  url.searchParams.set('limit', this.value);
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+};
+
+// ── Filter panel ──────────────────────────────────────────────────────────────
+var filterPanel = document.getElementById('filter-panel');
+var filterToggle = document.getElementById('filter-toggle');
+var filterRowsEl = document.getElementById('filter-rows');
+var queryables = {};
+var panelOpen = false;
+var pendingRows = [];
+
+filterToggle.onclick = function() {
+  panelOpen = !panelOpen;
+  filterPanel.style.display = panelOpen ? '' : 'none';
+  filterToggle.textContent = panelOpen ? 'Filter ▴' : 'Filter ▾';
+  if (panelOpen && Object.keys(queryables).length === 0) loadQueryables();
+};
+
+function loadQueryables() {
+  document.getElementById('queryables-status').textContent = '(loading…)';
+  fetch('{{.BaseURL}}/collections/{{.ColID}}/queryables')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      queryables = data.properties || {};
+      document.getElementById('queryables-status').textContent = '';
+      if (pendingRows.length > 0) {
+        pendingRows.forEach(function(r) { addFilterRow(r.prop, r.op, r.val); });
+        pendingRows = [];
+      } else if (filterRowsEl.children.length === 0) {
+        addFilterRow();
+      } else {
+        Array.from(filterRowsEl.querySelectorAll('.prop-sel')).forEach(function(sel) {
+          var cur = sel.value; populatePropSelect(sel); sel.value = cur;
+        });
+      }
+    })
+    .catch(function(){ document.getElementById('queryables-status').textContent = '(unavailable)'; });
+}
+
+function populatePropSelect(sel) {
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">— property —</option>' +
+    Object.keys(queryables).map(function(k) {
+      var label = (queryables[k] && queryables[k].title) || k;
+      return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+label+'</option>';
+    }).join('');
+}
+
+var OPERATORS = ['=', '<>', '>', '<', '>=', '<=', 'LIKE', 'IS NULL', 'IS NOT NULL'];
+
+function addFilterRow(prop, op, val) {
+  var row = document.createElement('div');
+  row.className = 'd-flex gap-2 align-items-center flex-wrap';
+  row.innerHTML =
+    '<select class="form-select form-select-sm prop-sel" style="flex:1 1 140px;min-width:0"></select>' +
+    '<select class="form-select form-select-sm op-sel" style="flex:1 1 100px;min-width:0">' +
+    OPERATORS.map(function(o){ return '<option'+(o===(op||'=')?' selected':'')+'>'+o+'</option>'; }).join('') +
+    '</select>' +
+    '<input class="form-control form-control-sm val-inp" placeholder="value" style="flex:1 1 120px;min-width:0" value="'+(val||'')+'">' +
+    '<button class="btn btn-json btn-sm flex-shrink-0" onclick="this.closest(\'.d-flex\').remove()">✕</button>';
+  filterRowsEl.appendChild(row);
+
+  var sel = row.querySelector('.prop-sel');
+  if (Object.keys(queryables).length > 0) { populatePropSelect(sel); if (prop) sel.value = prop; }
+
+  var opSel = row.querySelector('.op-sel');
+  var valInp = row.querySelector('.val-inp');
+  function syncVal() { valInp.style.display = (opSel.value === 'IS NULL' || opSel.value === 'IS NOT NULL') ? 'none' : ''; }
+  opSel.onchange = syncVal;
+  if (op) syncVal();
+}
+
+function buildCQL2() {
+  var parts = [];
+  Array.from(filterRowsEl.children).forEach(function(row) {
+    var prop = row.querySelector('.prop-sel').value;
+    var op = row.querySelector('.op-sel').value;
+    var val = row.querySelector('.val-inp').value;
+    if (!prop) return;
+    if (op === 'IS NULL' || op === 'IS NOT NULL') { parts.push(prop + ' ' + op); return; }
+    if (!val) return;
+    var q = queryables[prop];
+    var typ = q ? q.type : 'string';
+    if (typ === 'integer' || typ === 'number') { parts.push(prop + ' ' + op + ' ' + val); }
+    else { parts.push(prop + ' ' + op + " '" + val.replace(/'/g, "''") + "'"); }
+  });
+  return parts.join(' AND ');
+}
+
+function applyFilters() {
+  var cql = buildCQL2();
+  var url = new URL(window.location.href);
+  if (cql) { url.searchParams.set('filter', cql); url.searchParams.set('filter-lang', 'cql2-text'); }
+  else { url.searchParams.delete('filter'); url.searchParams.delete('filter-lang'); }
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
+function clearFilters() {
+  var url = new URL(window.location.href);
+  url.searchParams.delete('filter'); url.searchParams.delete('filter-lang'); url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
+// Pre-populate filter rows from URL on load
+(function() {
+  var urlFilter = new URL(window.location.href).searchParams.get('filter');
+  if (!urlFilter) return;
+  var re = /(\w+)\s+(IS NOT NULL|IS NULL|>=|<=|<>|LIKE|>|<|=)\s*(?:'([^']*)'|([\S]+))?/gi;
+  var m, rows = [];
+  while ((m = re.exec(urlFilter)) !== null) {
+    rows.push({prop: m[1], op: m[2].toUpperCase(), val: m[3] !== undefined ? m[3] : (m[4] || '')});
+  }
+  if (rows.length > 0) {
+    panelOpen = true; filterPanel.style.display = ''; filterToggle.textContent = 'Filter ▴';
+    pendingRows = rows; loadQueryables();
+  }
+})();
 </script>
 </body>
 </html>

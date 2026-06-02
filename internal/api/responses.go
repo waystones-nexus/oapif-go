@@ -37,6 +37,7 @@ type CollectionInfo struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
 	Extent      *Extent  `json:"extent,omitempty"`
 	Links       []Link   `json:"links"`
 	CRS         []string `json:"crs,omitempty"`
