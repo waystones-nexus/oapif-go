@@ -133,10 +133,10 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
-	// Resolve GeomIsNative: GeoParquet encoding field is authoritative; fall back to DuckDB type.
-	if enc := geo.Columns[col.GeomColumn].Encoding; enc != "" {
-		col.GeomIsNative = !strings.EqualFold(enc, "WKB")
-	} else if t, ok := nameSet[col.GeomColumn]; ok {
+	// Resolve GeomIsNative from DuckDB's DESCRIBE output (authoritative at query time).
+	// DuckDB's spatial extension auto-converts GeoParquet WKB columns to native GEOMETRY,
+	// so the GeoParquet encoding field does not reflect the actual runtime type.
+	if t, ok := nameSet[col.GeomColumn]; ok {
 		col.GeomIsNative = strings.HasPrefix(strings.ToUpper(t), "GEOMETRY")
 	}
 
@@ -196,7 +196,21 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 		}
 	}
 
-	// Slow path: full geometry scan for files without GeoParquet metadata.
+	// Medium path: aggregate the pre-computed bbox columns using parquet column statistics.
+	// DuckDB resolves MIN/MAX over simple numeric columns from parquet row-group stats
+	// without reading row data, making this nearly as fast as the metadata path.
+	if col.BboxColsStyle == "flat" {
+		var minX, minY, maxX, maxY sql.NullFloat64
+		err := s.db.QueryRowContext(ctx, fmt.Sprintf(
+			"SELECT MIN(bbox_xmin), MIN(bbox_ymin), MAX(bbox_xmax), MAX(bbox_ymax) FROM read_parquet('%s')", purl,
+		)).Scan(&minX, &minY, &maxX, &maxY)
+		if err == nil && minX.Valid {
+			col.Extent = [4]float64{minX.Float64, minY.Float64, maxX.Float64, maxY.Float64}
+			return nil
+		}
+	}
+
+	// Slow path: full geometry scan for files without GeoParquet metadata or bbox columns.
 	g := geomExpr(col)
 	query := fmt.Sprintf(`
 		SELECT
