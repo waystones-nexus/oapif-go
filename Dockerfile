@@ -10,16 +10,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+COPY . .
 
 # Pin the go-duckdb version so builds are reproducible.
 # The module version encodes the bundled DuckDB version:
 #   v2.XYYZZP → DuckDB vX.YY.ZZ  (e.g. v2.10503.1 → DuckDB v1.5.3)
 # Update both this and DUCKDB_VERSION below together.
-COPY go.mod ./
-RUN go get github.com/duckdb/duckdb-go/v2@v2.10503.1 && go mod tidy
-
-COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -v -o /app/server ./cmd/server
+#
+# BuildKit cache mounts keep the Go module and build caches between runs
+# so repeated builds don't re-download or re-compile DuckDB from scratch.
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go get github.com/duckdb/duckdb-go/v2@v2.10503.1 && \
+    go mod tidy && \
+    CGO_ENABLED=1 GOOS=linux go build -v -o /app/server ./cmd/server
 
 # ── Stage 2: Pre-bake DuckDB extensions ───────────────────────────────────
 FROM golang:1.24-bookworm AS extensions
