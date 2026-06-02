@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -451,13 +452,23 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 
 	if acceptsHTML(r) {
 		featJSON, _ := json.Marshal(geoFeatures)
+		// Use relative paths for prev/next so they work regardless of SERVER_URL.
+		linkToRelPath := func(href string) string {
+			if u, err := url.Parse(href); err == nil {
+				if u.RawQuery != "" {
+					return u.Path + "?" + u.RawQuery
+				}
+				return u.Path
+			}
+			return href
+		}
 		var prevHref, nextHref string
 		for _, l := range links {
 			if l.Rel == "next" {
-				nextHref = l.Href
+				nextHref = linkToRelPath(l.Href)
 			}
 			if l.Rel == "prev" {
-				prevHref = l.Href
+				prevHref = linkToRelPath(l.Href)
 			}
 		}
 		h.renderHTML(w, "items.html", itemsTmplData{

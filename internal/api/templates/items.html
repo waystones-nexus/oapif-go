@@ -27,6 +27,7 @@
           <option value="1000" {{if eq .Limit 1000}}selected{{end}}>1000</option>
         </select>
       </label>
+      <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
       <button id="filter-toggle" class="btn btn-json btn-sm">Filter ▾</button>
       <a href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}" class="btn btn-json">JSON</a>
     </div>
@@ -87,7 +88,7 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
-var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
 var map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/positron',
@@ -141,9 +142,7 @@ if (features && features.length > 0) {
     map.addLayer({id: 'feat-fill', type: 'fill', source: 'features',
       filter: ['==', '$type', 'Polygon'],
       paint: {'fill-color': brandColor,
-        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.6,
-          // Slightly more opaque at low zoom so small polygons are at least faintly visible
-          ['interpolate', ['linear'], ['zoom'], 4, 0.5, 10, 0.35]]}});
+        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.6, 0.35]}});
     map.addLayer({id: 'feat-line', type: 'line', source: 'features',
       filter: ['in', '$type', 'Polygon', 'LineString'],
       paint: {'line-color': brandColor,
