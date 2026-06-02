@@ -34,13 +34,13 @@ ARG DUCKDB_VERSION=v1.5.3
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /extensions && \
+RUN mkdir -p /extensions/${DUCKDB_VERSION}/linux_amd64 && \
     curl -fsSL \
       "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/spatial.duckdb_extension.gz" \
-      | gunzip > /extensions/spatial.duckdb_extension && \
+      | gunzip > /extensions/${DUCKDB_VERSION}/linux_amd64/spatial.duckdb_extension && \
     curl -fsSL \
       "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension.gz" \
-      | gunzip > /extensions/httpfs.duckdb_extension
+      | gunzip > /extensions/${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension
 
 # ── Stage 3a: minimal — Cloudflare Containers (direct HTTP, no Caddy) ─────
 FROM debian:bookworm-slim AS minimal
