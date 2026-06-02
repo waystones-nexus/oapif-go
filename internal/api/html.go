@@ -57,6 +57,5 @@ func acceptsHTML(r *http.Request) bool {
 		strings.Contains(accept, "application/geo+json") {
 		return false
 	}
-	return strings.Contains(accept, "text/html") ||
-		strings.Contains(accept, "*/*") || accept == ""
+	return strings.Contains(accept, "text/html")
 }
