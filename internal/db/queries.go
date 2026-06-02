@@ -10,33 +10,62 @@ import (
 	"github.com/waystones/oapif-go/internal/config"
 )
 
-// DetectColumns runs DESCRIBE on the parquet file and, if the configured GeomColumn or IDColumn
-// is absent from the schema, substitutes the first matching candidate. This handles parquet files
-// whose geometry column is "geom", "the_geom", etc. rather than the default "geometry".
+// DetectColumns reads the parquet schema and GeoParquet `geo` metadata to determine:
+//   - geometry column name and whether it is a native GEOMETRY type or WKB BLOB
+//   - ID column name
+//   - whether pre-computed bbox columns exist (for row-group pruning)
+//
+// It mutates col in place; all subsequent queries use the resolved field names.
 func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig, bucket string) error {
 	purl := parquetURL(bucket, col.ParquetKey)
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
+
+	// Read GeoParquet spec `geo` key-value metadata (parquet file footer, no row scan).
+	type geoColMeta struct {
+		Encoding string    `json:"encoding"`
+		Bbox     []float64 `json:"bbox"`
+	}
+	type geoMeta struct {
+		PrimaryColumn string                 `json:"primary_column"`
+		Columns       map[string]geoColMeta  `json:"columns"`
+	}
+	var geo geoMeta
+	var rawGeo interface{}
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT value FROM parquet_kv_metadata('%s') WHERE key='geo'", purl,
+	)).Scan(&rawGeo); err == nil {
+		var b []byte
+		switch v := rawGeo.(type) {
+		case []byte:
+			b = v
+		case string:
+			b = []byte(v)
+		}
+		json.Unmarshal(b, &geo) //nolint:errcheck — partial parse is fine
+	}
+
+	// Read parquet schema.
+	descRows, err := s.db.QueryContext(ctx, fmt.Sprintf(
 		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl,
 	))
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer descRows.Close()
 
-	descCols, err := rows.Columns()
+	descCols, err := descRows.Columns()
 	if err != nil {
 		return err
 	}
 
 	type colMeta struct{ name, typ string }
 	var schema []colMeta
-	for rows.Next() {
+	for descRows.Next() {
 		vals := make([]interface{}, len(descCols))
 		ptrs := make([]interface{}, len(descCols))
 		for i := range vals {
 			ptrs[i] = &vals[i]
 		}
-		if err := rows.Scan(ptrs...); err != nil {
+		if err := descRows.Scan(ptrs...); err != nil {
 			return err
 		}
 		schema = append(schema, colMeta{
@@ -44,7 +73,7 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 			typ:  fmt.Sprintf("%v", vals[1]),
 		})
 	}
-	if err := rows.Err(); err != nil {
+	if err := descRows.Err(); err != nil {
 		return err
 	}
 
@@ -53,15 +82,21 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		nameSet[c.name] = c.typ
 	}
 
-	// Auto-detect geometry column if configured name is absent.
+	// Resolve geometry column: configured name → GeoParquet primary_column → name heuristics → first BLOB.
 	if _, ok := nameSet[col.GeomColumn]; !ok {
-		for _, candidate := range []string{"geometry", "geom", "the_geom", "wkb_geometry", "shape"} {
-			if _, ok := nameSet[candidate]; ok {
-				col.GeomColumn = candidate
-				break
+		if geo.PrimaryColumn != "" {
+			if _, ok := nameSet[geo.PrimaryColumn]; ok {
+				col.GeomColumn = geo.PrimaryColumn
 			}
 		}
-		// Fall back to first BLOB column.
+		if _, ok := nameSet[col.GeomColumn]; !ok {
+			for _, candidate := range []string{"geometry", "geom", "the_geom", "wkb_geometry", "shape"} {
+				if _, ok := nameSet[candidate]; ok {
+					col.GeomColumn = candidate
+					break
+				}
+			}
+		}
 		if _, ok := nameSet[col.GeomColumn]; !ok {
 			for _, c := range schema {
 				if strings.ToUpper(c.typ) == "BLOB" {
@@ -72,7 +107,7 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
-	// Auto-detect ID column if configured name is absent.
+	// Resolve ID column: configured name → name heuristics → first INT → first non-geom.
 	if _, ok := nameSet[col.IDColumn]; !ok {
 		for _, candidate := range []string{"fid", "id", "gid", "osm_id", "objectid", "feature_id"} {
 			if _, ok := nameSet[candidate]; ok {
@@ -80,17 +115,14 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 				break
 			}
 		}
-		// Fall back to first integer-typed column.
 		if _, ok := nameSet[col.IDColumn]; !ok {
 			for _, c := range schema {
-				t := strings.ToUpper(c.typ)
-				if strings.Contains(t, "INT") {
+				if strings.Contains(strings.ToUpper(c.typ), "INT") {
 					col.IDColumn = c.name
 					break
 				}
 			}
 		}
-		// Last resort: first non-geom column.
 		if _, ok := nameSet[col.IDColumn]; !ok {
 			for _, c := range schema {
 				if c.name != col.GeomColumn {
@@ -101,9 +133,24 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
-	// Detect whether geometry column is already a native GEOMETRY type (no WKB cast needed).
-	if t, ok := nameSet[col.GeomColumn]; ok {
+	// Resolve GeomIsNative: GeoParquet encoding field is authoritative; fall back to DuckDB type.
+	if enc := geo.Columns[col.GeomColumn].Encoding; enc != "" {
+		col.GeomIsNative = !strings.EqualFold(enc, "WKB")
+	} else if t, ok := nameSet[col.GeomColumn]; ok {
 		col.GeomIsNative = strings.HasPrefix(strings.ToUpper(t), "GEOMETRY")
+	}
+
+	// Detect pre-computed bbox columns for row-group pruning.
+	lname := func(n string) string { return strings.ToLower(n) }
+	lnames := make(map[string]bool, len(schema))
+	for _, c := range schema {
+		lnames[lname(c.name)] = true
+	}
+	switch {
+	case lnames["bbox_xmin"] && lnames["bbox_ymin"] && lnames["bbox_xmax"] && lnames["bbox_ymax"]:
+		col.BboxColsStyle = "flat"
+	case lnames["bbox"]:
+		col.BboxColsStyle = "struct"
 	}
 
 	return nil
@@ -118,10 +165,38 @@ func geomExpr(col *config.CollectionConfig) string {
 	return fmt.Sprintf("ST_GeomFromWKB(%s)", col.GeomColumn)
 }
 
-// CacheExtent computes and stores the spatial extent of the collection's parquet file.
-// Called once at startup; extent is stored on the CollectionConfig pointer.
+// CacheExtent stores the spatial extent of the collection. It first tries reading the `bbox`
+// array from the GeoParquet `geo` key-value metadata (instant, no row scan). Only if that
+// is absent does it fall back to a full ST_Envelope scan over all rows.
 func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, bucket string) error {
 	purl := parquetURL(bucket, col.ParquetKey)
+
+	// Fast path: GeoParquet spec stores bbox in file metadata.
+	var rawGeo interface{}
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT value FROM parquet_kv_metadata('%s') WHERE key='geo'", purl,
+	)).Scan(&rawGeo); err == nil {
+		var b []byte
+		switch v := rawGeo.(type) {
+		case []byte:
+			b = v
+		case string:
+			b = []byte(v)
+		}
+		var geo struct {
+			Columns map[string]struct {
+				Bbox []float64 `json:"bbox"`
+			} `json:"columns"`
+		}
+		if json.Unmarshal(b, &geo) == nil {
+			if bbox := geo.Columns[col.GeomColumn].Bbox; len(bbox) == 4 {
+				col.Extent = [4]float64{bbox[0], bbox[1], bbox[2], bbox[3]}
+				return nil
+			}
+		}
+	}
+
+	// Slow path: full geometry scan for files without GeoParquet metadata.
 	g := geomExpr(col)
 	query := fmt.Sprintf(`
 		SELECT
@@ -137,7 +212,6 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 	if err := row.Scan(&minX, &minY, &maxX, &maxY); err != nil {
 		return err
 	}
-	// Default to world extent if the file is empty or extent is NULL
 	if !minX.Valid {
 		col.Extent = [4]float64{-180, -90, 180, 90}
 	} else {
@@ -163,6 +237,9 @@ func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfi
 		return err
 	}
 
+	bboxExclude := map[string]bool{
+		"bbox": true, "bbox_xmin": true, "bbox_ymin": true, "bbox_xmax": true, "bbox_ymax": true,
+	}
 	col.Queryables = make(map[string]config.QueryableField)
 	for rows.Next() {
 		vals := make([]interface{}, len(cols))
@@ -175,7 +252,7 @@ func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfi
 		}
 		colName := fmt.Sprintf("%v", vals[0])
 		colType := fmt.Sprintf("%v", vals[1])
-		if colName == col.GeomColumn || colName == col.IDColumn {
+		if colName == col.GeomColumn || colName == col.IDColumn || bboxExclude[strings.ToLower(colName)] {
 			continue
 		}
 		col.Queryables[colName] = duckTypeToSchema(colType)
@@ -235,10 +312,26 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	g := geomExpr(col)
 	where := ""
 	if bbox != nil {
-		where = fmt.Sprintf(
-			"WHERE ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
-			g, bbox[0], bbox[1], bbox[2], bbox[3],
-		)
+		minx, miny, maxx, maxy := bbox[0], bbox[1], bbox[2], bbox[3]
+		// Numeric bbox predicates let DuckDB prune row groups via parquet statistics
+		// before evaluating the geometry intersection (avoids unnecessary S3 range requests).
+		switch col.BboxColsStyle {
+		case "flat":
+			where = fmt.Sprintf(
+				"WHERE bbox_xmin <= %f AND bbox_xmax >= %f AND bbox_ymin <= %f AND bbox_ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
+				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
+			)
+		case "struct":
+			where = fmt.Sprintf(
+				"WHERE bbox.xmin <= %f AND bbox.xmax >= %f AND bbox.ymin <= %f AND bbox.ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
+				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
+			)
+		default:
+			where = fmt.Sprintf(
+				"WHERE ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
+				g, minx, miny, maxx, maxy,
+			)
+		}
 	}
 
 	var total int64
@@ -248,15 +341,24 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		return nil, 0, fmt.Errorf("count: %w", err)
 	}
 
+	// Build EXCLUDE list: geom, id, and any bbox columns (internal; not user-visible).
+	excludeCols := []string{col.GeomColumn, col.IDColumn}
+	switch col.BboxColsStyle {
+	case "flat":
+		excludeCols = append(excludeCols, "bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax")
+	case "struct":
+		excludeCols = append(excludeCols, "bbox")
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
 			ST_AsGeoJSON(%s)::VARCHAR AS geometry,
-			* EXCLUDE (%s, %s)
+			* EXCLUDE (%s)
 		FROM read_parquet('%s')
 		%s
 		LIMIT %d OFFSET %d
-	`, col.IDColumn, g, col.GeomColumn, col.IDColumn, purl, where, limit, offset)
+	`, col.IDColumn, g, strings.Join(excludeCols, ", "), purl, where, limit, offset)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {

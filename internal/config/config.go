@@ -25,6 +25,9 @@ type CollectionConfig struct {
 	// GeomIsNative is true when the geometry column is already a DuckDB GEOMETRY type
 	// (no ST_GeomFromWKB wrapper needed). Set by DetectColumns at startup.
 	GeomIsNative bool
+	// BboxColsStyle is set by DetectColumns when the parquet file contains pre-computed
+	// bbox columns. "flat" = bbox_xmin/ymin/xmax/ymax; "struct" = bbox.xmin etc; "" = absent.
+	BboxColsStyle string
 }
 
 type Config struct {
