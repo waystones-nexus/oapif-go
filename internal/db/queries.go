@@ -18,6 +18,23 @@ type DatetimeFilter struct {
 	Exact bool       // if true, Low is an equality match
 }
 
+// FilterExpr holds a parameterized SQL WHERE fragment produced by property filters or CQL2.
+type FilterExpr struct {
+	SQL  string
+	Args []interface{}
+}
+
+// QueryOptions bundles all query parameters for QueryItems.
+type QueryOptions struct {
+	Limit     int
+	Offset    int
+	Bbox      *[4]float64
+	BboxCRS   string        // EPSG code e.g. "EPSG:3857"; "" = CRS84 (no transform)
+	Datetime  *DatetimeFilter
+	Filter    *FilterExpr   // parameterized WHERE fragment; nil = no filter
+	OutputCRS string        // EPSG code for output geometry; "" = CRS84 (no transform)
+}
+
 // DetectColumns reads the parquet schema and GeoParquet `geo` metadata to determine:
 //   - geometry column name and whether it is a native GEOMETRY type or WKB BLOB
 //   - ID column name
@@ -184,6 +201,16 @@ func geomExpr(col *config.CollectionConfig) string {
 	return fmt.Sprintf("ST_GeomFromWKB(%s)", col.GeomColumn)
 }
 
+// geomOutputExpr returns the SQL expression that produces a GeoJSON string from the geometry column,
+// optionally re-projecting to outputCRS (an EPSG code string like "EPSG:3857"; "" = no transform).
+func geomOutputExpr(col *config.CollectionConfig, outputCRS string) string {
+	g := geomExpr(col)
+	if outputCRS == "" {
+		return "ST_AsGeoJSON(" + g + ")::VARCHAR"
+	}
+	return fmt.Sprintf("ST_AsGeoJSON(ST_Transform(%s, 'EPSG:4326', '%s'))::VARCHAR", g, outputCRS)
+}
+
 // CacheExtent stores the spatial extent of the collection. It first tries reading the `bbox`
 // array from the GeoParquet `geo` key-value metadata (instant, no row scan). Only if that
 // is absent does it fall back to a full ST_Envelope scan over all rows.
@@ -338,23 +365,29 @@ type Feature struct {
 	Properties map[string]interface{}
 }
 
-// QueryItems fetches a paginated, optionally bbox-filtered and datetime-filtered list of features.
-func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, limit, offset int, bbox *[4]float64, dt *DatetimeFilter) ([]Feature, int64, error) {
+// QueryItems fetches a paginated, optionally filtered list of features.
+func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, opts QueryOptions) ([]Feature, int64, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
 
 	g := geomExpr(col)
 	where := ""
-	if bbox != nil {
-		minx, miny, maxx, maxy := bbox[0], bbox[1], bbox[2], bbox[3]
-		// Numeric bbox predicates let DuckDB prune row groups via parquet statistics
-		// before evaluating the geometry intersection (avoids unnecessary S3 range requests).
-		switch col.BboxColsStyle {
-		case "flat":
+	if opts.Bbox != nil {
+		minx, miny, maxx, maxy := opts.Bbox[0], opts.Bbox[1], opts.Bbox[2], opts.Bbox[3]
+		switch {
+		case opts.BboxCRS != "":
+			// bbox is in a non-CRS84 CRS: transform the envelope to EPSG:4326 for the intersect check.
+			where = fmt.Sprintf(
+				"WHERE ST_Intersects(%s, ST_Transform(ST_MakeEnvelope(%f, %f, %f, %f), '%s', 'EPSG:4326'))",
+				g, minx, miny, maxx, maxy, opts.BboxCRS,
+			)
+		case col.BboxColsStyle == "flat":
+			// Numeric bbox predicates let DuckDB prune row groups via parquet statistics
+			// before evaluating the geometry intersection (avoids unnecessary S3 range requests).
 			where = fmt.Sprintf(
 				"WHERE bbox_xmin <= %f AND bbox_xmax >= %f AND bbox_ymin <= %f AND bbox_ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
 				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
 			)
-		case "struct":
+		case col.BboxColsStyle == "struct":
 			where = fmt.Sprintf(
 				"WHERE bbox.xmin <= %f AND bbox.xmax >= %f AND bbox.ymin <= %f AND bbox.ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
 				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
@@ -367,7 +400,8 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		}
 	}
 
-	if dt != nil && col.DatetimeColumn != "" {
+	if opts.Datetime != nil && col.DatetimeColumn != "" {
+		dt := opts.Datetime
 		dtCol := col.DatetimeColumn
 		clause := ""
 		switch {
@@ -390,9 +424,20 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		}
 	}
 
+	var whereArgs []interface{}
+	if opts.Filter != nil && opts.Filter.SQL != "" {
+		if where == "" {
+			where = "WHERE " + opts.Filter.SQL
+		} else {
+			where += " AND " + opts.Filter.SQL
+		}
+		whereArgs = opts.Filter.Args
+	}
+
 	var total int64
 	if err := s.db.QueryRowContext(ctx,
 		fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') %s", purl, where),
+		whereArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count: %w", err)
 	}
@@ -409,14 +454,14 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
-			ST_AsGeoJSON(%s)::VARCHAR AS geometry,
+			%s AS geometry,
 			* EXCLUDE (%s)
 		FROM read_parquet('%s')
 		%s
 		LIMIT %d OFFSET %d
-	`, col.IDColumn, g, strings.Join(excludeCols, ", "), purl, where, limit, offset)
+	`, col.IDColumn, geomOutputExpr(col, opts.OutputCRS), strings.Join(excludeCols, ", "), purl, where, opts.Limit, opts.Offset)
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, whereArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("items: %w", err)
 	}
@@ -453,18 +498,18 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 
 // QueryItem fetches a single feature by its ID column value.
 // Returns (nil, nil) when the feature is not found.
-func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID string) (*Feature, error) {
+// outputCRS is an EPSG code string (e.g. "EPSG:3857") for geometry reprojection; "" = no transform.
+func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID string, outputCRS string) (*Feature, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
-	g := geomExpr(col)
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
-			ST_AsGeoJSON(%s)::VARCHAR AS geometry,
+			%s AS geometry,
 			* EXCLUDE (%s, %s)
 		FROM read_parquet('%s')
 		WHERE CAST(%s AS VARCHAR) = '%s'
 		LIMIT 1
-	`, col.IDColumn, g, col.GeomColumn, col.IDColumn, purl, col.IDColumn, featureID)
+	`, col.IDColumn, geomOutputExpr(col, outputCRS), col.GeomColumn, col.IDColumn, purl, col.IDColumn, featureID)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {

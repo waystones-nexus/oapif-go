@@ -35,6 +35,7 @@ type itemsTmplData struct {
 	Offset       int
 	Bbox         string
 	Datetime     string
+	Filter       string
 	PrevHref     string
 	NextHref     string
 }

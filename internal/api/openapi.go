@@ -61,6 +61,25 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 					"description": "RFC 3339 instant or interval (../T or T/.. or T/T)",
 					"schema":      map[string]any{"type": "string"},
 				},
+				"filter": map[string]any{
+					"name": "filter", "in": "query",
+					"description": "CQL2-Text filter expression",
+					"schema":      map[string]any{"type": "string"},
+				},
+				"filter-lang": map[string]any{
+					"name": "filter-lang", "in": "query",
+					"schema": map[string]any{"type": "string", "enum": []string{"cql2-text", "cql2-json"}, "default": "cql2-text"},
+				},
+				"crs": map[string]any{
+					"name": "crs", "in": "query",
+					"description": "Output CRS URI (OGC format)",
+					"schema":      map[string]any{"type": "string"},
+				},
+				"bbox-crs": map[string]any{
+					"name": "bbox-crs", "in": "query",
+					"description": "CRS URI for the bbox parameter",
+					"schema":      map[string]any{"type": "string"},
+				},
 			},
 			"schemas": map[string]any{
 				"FeatureCollection": map[string]any{
@@ -163,7 +182,7 @@ func buildPaths() map[string]any {
 		"/collections/{collectionId}/items": map[string]any{
 			"get": map[string]any{
 				"summary": "Items", "operationId": "getItems",
-				"parameters": []any{ref("collectionId"), ref("limit"), ref("offset"), ref("bbox"), ref("datetime")},
+				"parameters": []any{ref("collectionId"), ref("limit"), ref("offset"), ref("bbox"), ref("datetime"), ref("filter"), ref("filter-lang"), ref("crs"), ref("bbox-crs")},
 				"responses":  geoResp("GeoJSON FeatureCollection"),
 			},
 		},

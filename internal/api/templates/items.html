@@ -9,6 +9,7 @@
       <span class="text-muted small">{{.Total}} features</span>
       {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}}</span>{{end}}
       {{if .Datetime}}<span class="brand-chip">datetime: {{.Datetime}}</span>{{end}}
+      {{if .Filter}}<span class="brand-chip">filter: {{.Filter}}</span>{{end}}
       <a href="{{.BaseURL}}/collections/{{.ColID}}/items?limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}" class="btn btn-json">JSON</a>
     </div>
   </div>

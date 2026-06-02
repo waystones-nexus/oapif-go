@@ -7,6 +7,26 @@ import (
 	"strings"
 )
 
+// normalizeOGCCRS converts short-form CRS identifiers to canonical OGC URI form.
+func normalizeOGCCRS(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+		return s
+	}
+	if strings.EqualFold(s, "CRS84") || strings.EqualFold(s, "OGC:CRS84") {
+		return "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+	}
+	if strings.EqualFold(s, "EPSG:4326") {
+		return "http://www.opengis.net/def/crs/EPSG/0/4326"
+	}
+	// "EPSG:XXXX" → OGC URI
+	upper := strings.ToUpper(s)
+	if strings.HasPrefix(upper, "EPSG:") {
+		return "http://www.opengis.net/def/crs/EPSG/0/" + s[5:]
+	}
+	return s
+}
+
 type QueryableField struct {
 	Type   string `json:"type"`
 	Format string `json:"format,omitempty"`
@@ -17,9 +37,10 @@ type CollectionConfig struct {
 	Title       string                    `json:"title"`
 	Description string                    `json:"description"`
 	ParquetKey  string                    `json:"parquet_key"`
-	GeomColumn  string                    `json:"geom_column"`
-	IDColumn    string                    `json:"id_column"`
-	CRS         string                    `json:"crs"`
+	GeomColumn    string   `json:"geom_column"`
+	IDColumn      string   `json:"id_column"`
+	CRS           string   `json:"crs"`
+	SupportedCRS  []string `json:"supported_crs,omitempty"`
 	Extent      [4]float64
 	Queryables  map[string]QueryableField
 	// GeomIsNative is true when the geometry column is already a DuckDB GEOMETRY type
@@ -125,6 +146,9 @@ func Load() *Config {
 		}
 		if c.CRS == "" {
 			c.CRS = "CRS84"
+		}
+		for i, crs := range c.SupportedCRS {
+			c.SupportedCRS[i] = normalizeOGCCRS(crs)
 		}
 	}
 

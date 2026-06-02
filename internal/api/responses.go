@@ -40,6 +40,7 @@ type CollectionInfo struct {
 	Extent      *Extent  `json:"extent,omitempty"`
 	Links       []Link   `json:"links"`
 	CRS         []string `json:"crs,omitempty"`
+	StorageCRS  string   `json:"storageCRS,omitempty"`
 }
 
 type CollectionsResponse struct {

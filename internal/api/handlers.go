@@ -6,14 +6,72 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/waystones/oapif-go/internal/config"
+	"github.com/waystones/oapif-go/internal/cql2"
 	"github.com/waystones/oapif-go/internal/db"
 )
+
+const (
+	crs84URI    = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+	epsg4326URI = "http://www.opengis.net/def/crs/EPSG/0/4326"
+)
+
+var reservedParams = map[string]bool{
+	"limit": true, "offset": true, "bbox": true, "bbox-crs": true,
+	"datetime": true, "filter": true, "filter-lang": true, "crs": true, "f": true,
+}
+
+// effectiveCRS returns the CRS URIs this collection advertises.
+// Always includes CRS84 and EPSG:4326; adds collection.SupportedCRS.
+func effectiveCRS(col *config.CollectionConfig) []string {
+	base := []string{crs84URI, epsg4326URI}
+	for _, c := range col.SupportedCRS {
+		if c != crs84URI && c != epsg4326URI {
+			base = append(base, c)
+		}
+	}
+	return base
+}
+
+// crsURItoEPSG returns the EPSG code string for ST_Transform, or "" if no
+// transform is needed (CRS84 / EPSG:4326 are the storage CRS).
+func crsURItoEPSG(uri string) string {
+	if uri == crs84URI || uri == epsg4326URI {
+		return ""
+	}
+	// "http://www.opengis.net/def/crs/EPSG/0/3857" → "EPSG:3857"
+	const prefix = "http://www.opengis.net/def/crs/EPSG/0/"
+	if strings.HasPrefix(uri, prefix) {
+		return "EPSG:" + uri[len(prefix):]
+	}
+	return uri // fallback: return as-is
+}
+
+func coerceValue(typ, s string) (interface{}, error) {
+	switch typ {
+	case "integer":
+		return strconv.ParseInt(s, 10, 64)
+	case "number":
+		return strconv.ParseFloat(s, 64)
+	case "boolean":
+		switch strings.ToLower(s) {
+		case "true", "1":
+			return true, nil
+		case "false", "0":
+			return false, nil
+		default:
+			return nil, fmt.Errorf("expected true or false")
+		}
+	default:
+		return s, nil
+	}
+}
 
 type Handler struct {
 	cfg         *config.Config
@@ -112,7 +170,6 @@ func (h *Handler) Collection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := buildCollectionInfo(col, h.cfg.ServerURL)
-	info.CRS = []string{"http://www.opengis.net/def/crs/OGC/1.3/CRS84"}
 	if acceptsHTML(r) {
 		var bboxJS template.JS
 		if col.Extent[0] != 0 || col.Extent[1] != 0 || col.Extent[2] != 0 || col.Extent[3] != 0 {
@@ -187,7 +244,79 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, limit, offset, bbox, dt)
+	// Property equality filters
+	var propSQL []string
+	var propArgs []interface{}
+	for k, vs := range q {
+		if reservedParams[k] {
+			continue
+		}
+		field, ok := col.Queryables[k]
+		if !ok {
+			InvalidParameter(w, k, "unknown property")
+			return
+		}
+		v, err := coerceValue(field.Type, vs[0])
+		if err != nil {
+			InvalidParameter(w, k, err.Error())
+			return
+		}
+		propSQL = append(propSQL, fmt.Sprintf(`"%s" = ?`, k))
+		propArgs = append(propArgs, v)
+	}
+
+	// CQL2-Text filter
+	if raw := q.Get("filter"); raw != "" {
+		if q.Get("filter-lang") == "cql2-json" {
+			writeError(w, 501, "Not Implemented",
+				"https://www.rfc-editor.org/rfc/rfc9110#section-15.6.2",
+				"filter-lang=cql2-json is not supported")
+			return
+		}
+		ast, err := cql2.Parse(raw)
+		if err != nil {
+			InvalidParameter(w, "filter", err.Error())
+			return
+		}
+		fsql, fargs, err := cql2.Translate(ast, col.Queryables)
+		if err != nil {
+			InvalidParameter(w, "filter", err.Error())
+			return
+		}
+		propSQL = append(propSQL, "("+fsql+")")
+		propArgs = append(propArgs, fargs...)
+	}
+	var filter *db.FilterExpr
+	if len(propSQL) > 0 {
+		filter = &db.FilterExpr{SQL: strings.Join(propSQL, " AND "), Args: propArgs}
+	}
+
+	// Output CRS
+	outputCRS, activeCRSURI := "", crs84URI
+	if crsURI := q.Get("crs"); crsURI != "" {
+		if !slices.Contains(effectiveCRS(col), crsURI) {
+			InvalidParameter(w, "crs", "unsupported CRS for this collection")
+			return
+		}
+		outputCRS = crsURItoEPSG(crsURI)
+		activeCRSURI = crsURI
+	}
+
+	// bbox-crs
+	bboxCRS := ""
+	if bboxCRSURI := q.Get("bbox-crs"); bboxCRSURI != "" {
+		if !slices.Contains(effectiveCRS(col), bboxCRSURI) {
+			InvalidParameter(w, "bbox-crs", "unsupported CRS for this collection")
+			return
+		}
+		bboxCRS = crsURItoEPSG(bboxCRSURI)
+	}
+
+	opts := db.QueryOptions{
+		Limit: limit, Offset: offset, Bbox: bbox, BboxCRS: bboxCRS,
+		Datetime: dt, Filter: filter, OutputCRS: outputCRS,
+	}
+	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, opts)
 	if err != nil {
 		log.Printf("items query error: %v", err)
 		InternalServerError(w, "query failed")
@@ -218,6 +347,8 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		links = append(links, PrevLink(base, path, prev, limit, q))
 	}
 
+	w.Header().Set("Content-Crs", "<"+activeCRSURI+">")
+
 	if acceptsHTML(r) {
 		featJSON, _ := json.Marshal(geoFeatures)
 		var prevHref, nextHref string
@@ -240,6 +371,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 			Offset:       offset,
 			Bbox:         q.Get("bbox"),
 			Datetime:     q.Get("datetime"),
+			Filter:       q.Get("filter"),
 			PrevHref:     prevHref,
 			NextHref:     nextHref,
 		})
@@ -263,7 +395,20 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 	}
 	featureID := r.PathValue("featureId")
 
-	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID)
+	q := r.URL.Query()
+
+	// Output CRS
+	outputCRS, activeCRSURI := "", crs84URI
+	if crsURI := q.Get("crs"); crsURI != "" {
+		if !slices.Contains(effectiveCRS(col), crsURI) {
+			InvalidParameter(w, "crs", "unsupported CRS for this collection")
+			return
+		}
+		outputCRS = crsURItoEPSG(crsURI)
+		activeCRSURI = crsURI
+	}
+
+	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID, outputCRS)
 	if err != nil {
 		log.Printf("item query error: %v", err)
 		InternalServerError(w, "query failed")
@@ -273,6 +418,8 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, fmt.Sprintf("Feature '%s' not found in collection '%s'", featureID, col.ID))
 		return
 	}
+
+	w.Header().Set("Content-Crs", "<"+activeCRSURI+">")
 
 	base := h.cfg.ServerURL
 	resp := SingleFeatureResponse{
@@ -316,6 +463,8 @@ func buildCollectionInfo(col *config.CollectionConfig, base string) CollectionIn
 			selfLink(fmt.Sprintf("%s/collections/%s", base, col.ID)),
 			itemsLink(base, col.ID),
 		},
+		StorageCRS: crs84URI,
+		CRS:        effectiveCRS(col),
 	}
 }
 
