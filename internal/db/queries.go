@@ -6,9 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/waystones/oapif-go/internal/config"
 )
+
+// DatetimeFilter represents a parsed OGC API datetime parameter.
+type DatetimeFilter struct {
+	Low   *time.Time // nil = unbounded start; also used as exact value when Exact=true
+	High  *time.Time // nil = unbounded end
+	Exact bool       // if true, Low is an equality match
+}
 
 // DetectColumns reads the parquet schema and GeoParquet `geo` metadata to determine:
 //   - geometry column name and whether it is a native GEOMETRY type or WKB BLOB
@@ -151,6 +159,17 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		col.BboxColsStyle = "flat"
 	case lnames["bbox"]:
 		col.BboxColsStyle = "struct"
+	}
+
+	// Detect datetime column: first TIMESTAMP/DATE column.
+	if col.DatetimeColumn == "" {
+		for _, c := range schema {
+			t := strings.ToUpper(c.typ)
+			if strings.HasPrefix(t, "TIMESTAMP") || strings.HasPrefix(t, "DATE") || t == "TIMESTAMPTZ" {
+				col.DatetimeColumn = c.name
+				break
+			}
+		}
 	}
 
 	return nil
@@ -319,8 +338,8 @@ type Feature struct {
 	Properties map[string]interface{}
 }
 
-// QueryItems fetches a paginated, optionally bbox-filtered list of features.
-func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, limit, offset int, bbox *[4]float64) ([]Feature, int64, error) {
+// QueryItems fetches a paginated, optionally bbox-filtered and datetime-filtered list of features.
+func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, limit, offset int, bbox *[4]float64, dt *DatetimeFilter) ([]Feature, int64, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
 
 	g := geomExpr(col)
@@ -345,6 +364,29 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 				"WHERE ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
 				g, minx, miny, maxx, maxy,
 			)
+		}
+	}
+
+	if dt != nil && col.DatetimeColumn != "" {
+		dtCol := col.DatetimeColumn
+		clause := ""
+		switch {
+		case dt.Exact && dt.Low != nil:
+			clause = fmt.Sprintf("%s = '%s'::TIMESTAMPTZ", dtCol, dt.Low.UTC().Format(time.RFC3339))
+		case dt.Low != nil && dt.High != nil:
+			clause = fmt.Sprintf("%s BETWEEN '%s'::TIMESTAMPTZ AND '%s'::TIMESTAMPTZ",
+				dtCol, dt.Low.UTC().Format(time.RFC3339), dt.High.UTC().Format(time.RFC3339))
+		case dt.Low != nil:
+			clause = fmt.Sprintf("%s >= '%s'::TIMESTAMPTZ", dtCol, dt.Low.UTC().Format(time.RFC3339))
+		case dt.High != nil:
+			clause = fmt.Sprintf("%s <= '%s'::TIMESTAMPTZ", dtCol, dt.High.UTC().Format(time.RFC3339))
+		}
+		if clause != "" {
+			if where == "" {
+				where = "WHERE " + clause
+			} else {
+				where += " AND " + clause
+			}
 		}
 	}
 

@@ -1,0 +1,35 @@
+{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / Collections{{end}}
+{{template "head" .}}
+{{template "nav" .}}
+
+<main class="container">
+  <h2 class="mb-4">Collections</h2>
+  {{range .Collections}}
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <h3 class="mb-1"><a href="{{$.BaseURL}}/collections/{{.ID}}">{{.Title}}</a></h3>
+          {{if .Description}}<p class="text-muted mb-2">{{.Description}}</p>{{end}}
+          {{if .Extent}}{{if .Extent.Spatial}}
+          <span class="brand-chip">
+            bbox: {{index (index .Extent.Spatial.Bbox 0) 0}},
+                  {{index (index .Extent.Spatial.Bbox 0) 1}},
+                  {{index (index .Extent.Spatial.Bbox 0) 2}},
+                  {{index (index .Extent.Spatial.Bbox 0) 3}}
+          </span>
+          {{end}}{{end}}
+        </div>
+        <a href="{{$.BaseURL}}/collections/{{.ID}}/items" class="btn btn-primary btn-sm">Explore</a>
+      </div>
+    </div>
+  </div>
+  {{else}}
+  <p class="text-muted">No collections configured.</p>
+  {{end}}
+</main>
+
+{{template "footer" .}}
+{{template "scripts-base" .}}
+</body>
+</html>

@@ -1,0 +1,47 @@
+{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / {{.Col.Title}}{{end}}
+{{template "head" .}}
+{{template "nav" .}}
+
+<main class="container">
+  <div class="row">
+    <div class="col-lg-8">
+      <div class="card mb-4">
+        <div class="card-header">{{.Col.Title}}</div>
+        <div class="card-body">
+          {{if .Col.Description}}<p>{{.Col.Description}}</p>{{end}}
+          {{if .Col.Extent}}{{if .Col.Extent.Spatial}}
+          <p><strong>Extent:</strong>
+            <span class="brand-chip">
+              {{index (index .Col.Extent.Spatial.Bbox 0) 0}},
+              {{index (index .Col.Extent.Spatial.Bbox 0) 1}},
+              {{index (index .Col.Extent.Spatial.Bbox 0) 2}},
+              {{index (index .Col.Extent.Spatial.Bbox 0) 3}}
+            </span>
+          </p>
+          <div id="map" style="height:260px" class="mb-3"></div>
+          {{end}}{{end}}
+          <div class="d-flex gap-2 mt-3">
+            <a href="{{.BaseURL}}/collections/{{.Col.ID}}/items" class="btn btn-primary">Explore Items</a>
+            <a href="{{.BaseURL}}/collections/{{.Col.ID}}/queryables" class="btn btn-json">Queryables</a>
+            <a href="{{.BaseURL}}/collections/{{.Col.ID}}" class="btn btn-json">JSON</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+{{template "footer" .}}
+{{template "scripts-base" .}}
+{{if .BboxJS}}
+<script>
+var bbox = {{.BboxJS}};
+var map = L.map('map');
+L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/positron'}).addTo(map);
+var bounds = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]];
+L.rectangle(bounds, {color: '#4338ca', weight: 2, fillOpacity: 0.1}).addTo(map);
+map.fitBounds(bounds, {padding: [20, 20]});
+</script>
+{{end}}
+</body>
+</html>

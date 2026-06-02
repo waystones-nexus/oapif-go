@@ -1,0 +1,57 @@
+{{define "crumbs"}}<a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.ColID}}</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}/items">Items</a> / {{.FeatureID}}{{end}}
+{{template "head" .}}
+{{template "nav" .}}
+
+<main class="container">
+  <div class="row">
+    <div class="col-lg-8">
+      <div class="card mb-4">
+        <div class="card-header">Feature {{.FeatureID}}</div>
+        <div class="card-body">
+          <div id="map" class="mb-4"></div>
+          <h3>Properties</h3>
+          <table class="table table-hover">
+            <thead><tr><th>Property</th><th>Value</th></tr></thead>
+            <tbody>
+              {{range $k, $v := .Feature.Properties}}
+              <tr><td class="fw-semibold">{{$k}}</td><td>{{$v}}</td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          <h3 class="mt-4">Geometry (GeoJSON)</h3>
+          <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
+          <div class="d-flex gap-2 mt-3">
+            <a href="{{.BaseURL}}/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
+            <a href="{{.BaseURL}}/collections/{{.ColID}}/items/{{.FeatureID}}" class="btn btn-json">JSON</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+{{template "footer" .}}
+{{template "scripts-base" .}}
+<script>
+var map = L.map('map');
+L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/positron'}).addTo(map);
+var feature = {{.FeatureJSON}};
+if (feature && feature.geometry) {
+  var layer = L.geoJSON(feature, {
+    style: {color: '#4338ca', weight: 2, fillOpacity: 0.3},
+    pointToLayer: function(f, ll) {
+      return L.circleMarker(ll, {radius: 8, color: '#4338ca', fillColor: '#4338ca', fillOpacity: 0.7});
+    }
+  }).addTo(map);
+  try {
+    var b = layer.getBounds();
+    if (b.isValid()) {
+      map.fitBounds(b, {padding: [30, 30], maxZoom: 14});
+    } else {
+      map.setView([0, 0], 2);
+    }
+  } catch(e) { map.setView([0, 0], 2); }
+}
+</script>
+</body>
+</html>

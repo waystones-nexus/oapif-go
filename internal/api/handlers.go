@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,14 +16,27 @@ import (
 )
 
 type Handler struct {
-	cfg       *config.Config
-	store     *db.Store
-	startTime time.Time
-	ttfbOnce  sync.Once
+	cfg         *config.Config
+	store       *db.Store
+	startTime   time.Time
+	ttfbOnce    sync.Once
+	openapiJSON []byte
+	tmpls       *template.Template
 }
 
 func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handler {
-	return &Handler{cfg: cfg, store: store, startTime: startTime}
+	spec, err := buildOpenAPI(cfg)
+	if err != nil {
+		panic("buildOpenAPI: " + err.Error())
+	}
+	tmpls := template.Must(template.ParseFS(templateFS, "templates/*.html"))
+	return &Handler{
+		cfg:         cfg,
+		store:       store,
+		startTime:   startTime,
+		openapiJSON: spec,
+		tmpls:       tmpls,
+	}
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -37,13 +51,27 @@ func (h *Handler) writeGeoJSON(w http.ResponseWriter, status int, v interface{})
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
 }
 
+func (h *Handler) renderHTML(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.tmpls.ExecuteTemplate(w, name, data); err != nil {
+		log.Printf("template %s: %v", name, err)
+		http.Error(w, "template error", 500)
+	}
+}
+
 func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 	base := h.cfg.ServerURL
+	if acceptsHTML(r) {
+		h.renderHTML(w, "index.html", indexTmplData{Title: h.cfg.ServerTitle, BaseURL: base})
+		return
+	}
 	h.writeJSON(w, http.StatusOK, LandingPage{
 		Title: h.cfg.ServerTitle,
 		Links: []Link{
 			selfLink(base + "/"),
-			{Href: base + "/conformance", Rel: "conformance", Type: "application/json", Title: "OGC API conformance classes"},
+			ConformanceLink(base),
+			APILink(base),
+			APIHTMLLink(base),
 			{Href: base + "/collections", Rel: "data", Type: "application/json", Title: "Collections"},
 		},
 	})
@@ -65,6 +93,12 @@ func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
 	for i := range h.cfg.Collections {
 		infos = append(infos, buildCollectionInfo(&h.cfg.Collections[i], base))
 	}
+	if acceptsHTML(r) {
+		h.renderHTML(w, "collections.html", collectionsTmplData{
+			Title: h.cfg.ServerTitle, BaseURL: base, Collections: infos,
+		})
+		return
+	}
 	h.writeJSON(w, http.StatusOK, CollectionsResponse{
 		Collections: infos,
 		Links:       []Link{selfLink(base + "/collections")},
@@ -74,18 +108,28 @@ func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Collection(w http.ResponseWriter, r *http.Request) {
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
-		http.Error(w, "collection not found", http.StatusNotFound)
+		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
 		return
 	}
 	info := buildCollectionInfo(col, h.cfg.ServerURL)
 	info.CRS = []string{"http://www.opengis.net/def/crs/OGC/1.3/CRS84"}
+	if acceptsHTML(r) {
+		var bboxJS template.JS
+		if col.Extent[0] != 0 || col.Extent[1] != 0 || col.Extent[2] != 0 || col.Extent[3] != 0 {
+			bboxJS = template.JS(fmt.Sprintf("[%f,%f,%f,%f]", col.Extent[0], col.Extent[1], col.Extent[2], col.Extent[3]))
+		}
+		h.renderHTML(w, "collection.html", collectionTmplData{
+			Title: h.cfg.ServerTitle, BaseURL: h.cfg.ServerURL, Col: info, BboxJS: bboxJS,
+		})
+		return
+	}
 	h.writeJSON(w, http.StatusOK, info)
 }
 
 func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
-		http.Error(w, "collection not found", http.StatusNotFound)
+		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
 		return
 	}
 
@@ -115,7 +159,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
-		http.Error(w, "collection not found", http.StatusNotFound)
+		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
 		return
 	}
 
@@ -127,17 +171,31 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 	if bboxStr := q.Get("bbox"); bboxStr != "" {
 		if b, ok := parseBbox(bboxStr); ok {
 			bbox = &b
+		} else {
+			InvalidParameter(w, "bbox", "must be minx,miny,maxx,maxy")
+			return
 		}
 	}
 
-	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, limit, offset, bbox)
+	dt, err := parseDatetime(q.Get("datetime"))
+	if err != nil {
+		InvalidParameter(w, "datetime", err.Error())
+		return
+	}
+	if dt != nil && col.DatetimeColumn == "" {
+		InvalidParameter(w, "datetime", "collection has no datetime column")
+		return
+	}
+
+	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, limit, offset, bbox, dt)
 	if err != nil {
 		log.Printf("items query error: %v", err)
-		http.Error(w, "query failed", http.StatusInternalServerError)
+		InternalServerError(w, "query failed")
 		return
 	}
 
 	base := h.cfg.ServerURL
+	path := fmt.Sprintf("/collections/%s/items", col.ID)
 	geoFeatures := make([]GeoJSONFeature, len(features))
 	for i, f := range features {
 		geoFeatures[i] = GeoJSONFeature{
@@ -150,7 +208,42 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 
 	links := []Link{geoSelfLink(base + r.RequestURI)}
 	if int64(offset+limit) < total {
-		links = append(links, nextPageLink(base, col.ID, limit, offset+limit))
+		links = append(links, NextLink(base, path, offset+limit, limit, q))
+	}
+	if offset > 0 {
+		prev := offset - limit
+		if prev < 0 {
+			prev = 0
+		}
+		links = append(links, PrevLink(base, path, prev, limit, q))
+	}
+
+	if acceptsHTML(r) {
+		featJSON, _ := json.Marshal(geoFeatures)
+		var prevHref, nextHref string
+		for _, l := range links {
+			if l.Rel == "next" {
+				nextHref = l.Href
+			}
+			if l.Rel == "prev" {
+				prevHref = l.Href
+			}
+		}
+		h.renderHTML(w, "items.html", itemsTmplData{
+			Title:        h.cfg.ServerTitle,
+			BaseURL:      base,
+			ColID:        col.ID,
+			Col:          buildCollectionInfo(col, base),
+			FeaturesJSON: template.JS(featJSON),
+			Total:        total,
+			Limit:        limit,
+			Offset:       offset,
+			Bbox:         q.Get("bbox"),
+			Datetime:     q.Get("datetime"),
+			PrevHref:     prevHref,
+			NextHref:     nextHref,
+		})
+		return
 	}
 
 	h.writeGeoJSON(w, http.StatusOK, FeatureCollection{
@@ -165,7 +258,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
-		http.Error(w, "collection not found", http.StatusNotFound)
+		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
 		return
 	}
 	featureID := r.PathValue("featureId")
@@ -173,16 +266,16 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID)
 	if err != nil {
 		log.Printf("item query error: %v", err)
-		http.Error(w, "query failed", http.StatusInternalServerError)
+		InternalServerError(w, "query failed")
 		return
 	}
 	if f == nil {
-		http.Error(w, "feature not found", http.StatusNotFound)
+		NotFound(w, fmt.Sprintf("Feature '%s' not found in collection '%s'", featureID, col.ID))
 		return
 	}
 
 	base := h.cfg.ServerURL
-	h.writeGeoJSON(w, http.StatusOK, SingleFeatureResponse{
+	resp := SingleFeatureResponse{
 		Type:       "Feature",
 		ID:         f.ID,
 		Geometry:   f.Geometry,
@@ -191,7 +284,22 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 			geoSelfLink(fmt.Sprintf("%s/collections/%s/items/%s", base, col.ID, featureID)),
 			collectionLink(base, col.ID),
 		},
-	})
+	}
+
+	if acceptsHTML(r) {
+		featJSON, _ := json.MarshalIndent(resp, "", "  ")
+		h.renderHTML(w, "item.html", itemTmplData{
+			Title:       h.cfg.ServerTitle,
+			BaseURL:     base,
+			ColID:       col.ID,
+			FeatureID:   featureID,
+			Feature:     resp,
+			FeatureJSON: template.JS(featJSON),
+		})
+		return
+	}
+
+	h.writeGeoJSON(w, http.StatusOK, resp)
 }
 
 func buildCollectionInfo(col *config.CollectionConfig, base string) CollectionInfo {
@@ -246,4 +354,41 @@ func parseBbox(s string) ([4]float64, bool) {
 		b[i] = v
 	}
 	return b, true
+}
+
+func parseDatetime(s string) (*db.DatetimeFilter, error) {
+	if s == "" {
+		return nil, nil
+	}
+	if strings.Contains(s, "/") {
+		parts := strings.SplitN(s, "/", 2)
+		if parts[0] == ".." {
+			t, err := time.Parse(time.RFC3339, parts[1])
+			if err != nil {
+				return nil, err
+			}
+			return &db.DatetimeFilter{High: &t}, nil
+		}
+		if parts[1] == ".." {
+			t, err := time.Parse(time.RFC3339, parts[0])
+			if err != nil {
+				return nil, err
+			}
+			return &db.DatetimeFilter{Low: &t}, nil
+		}
+		t1, err := time.Parse(time.RFC3339, parts[0])
+		if err != nil {
+			return nil, err
+		}
+		t2, err := time.Parse(time.RFC3339, parts[1])
+		if err != nil {
+			return nil, err
+		}
+		return &db.DatetimeFilter{Low: &t1, High: &t2}, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil, err
+	}
+	return &db.DatetimeFilter{Low: &t, Exact: true}, nil
 }

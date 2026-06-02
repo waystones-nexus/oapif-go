@@ -28,6 +28,8 @@ type CollectionConfig struct {
 	// BboxColsStyle is set by DetectColumns when the parquet file contains pre-computed
 	// bbox columns. "flat" = bbox_xmin/ymin/xmax/ymax; "struct" = bbox.xmin etc; "" = absent.
 	BboxColsStyle string
+	// DatetimeColumn is set by DetectColumns; empty if no timestamp column found.
+	DatetimeColumn string
 }
 
 type Config struct {

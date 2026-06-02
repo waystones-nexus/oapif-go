@@ -1,0 +1,25 @@
+{{template "head" .}}
+{{template "nav" .}}
+
+<main class="container">
+  <div class="row mt-4">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">{{.Title}}</div>
+        <div class="card-body">
+          <p class="mb-4">OGC API Features service. Browse spatial datasets as GeoJSON.</p>
+          <div class="d-flex gap-2 flex-wrap">
+            <a href="{{.BaseURL}}/collections" class="btn btn-primary">Collections</a>
+            <a href="{{.BaseURL}}/api.html" class="btn btn-json">API Documentation</a>
+            <a href="{{.BaseURL}}/conformance" class="btn btn-json">Conformance</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+{{template "footer" .}}
+{{template "scripts-base" .}}
+</body>
+</html>

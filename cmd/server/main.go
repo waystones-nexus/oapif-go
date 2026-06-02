@@ -63,6 +63,8 @@ func main() {
 	mux.HandleFunc("GET /collections/{collectionId}/queryables", h.Queryables)
 	mux.HandleFunc("GET /collections/{collectionId}/items", h.Items)
 	mux.HandleFunc("GET /collections/{collectionId}/items/{featureId}", h.Item)
+	mux.HandleFunc("GET /api", h.OpenAPI)
+	mux.HandleFunc("GET /api.html", h.OpenAPIHTML)
 
 	addr := ":" + cfg.Port
 	logStartup("HTTP server listening on %s", addr)
