@@ -2,31 +2,25 @@
 FROM caddy:latest AS caddy-bin
 
 # ── Stage 1: Build Go binary ───────────────────────────────────────────────
-FROM golang:1.22-bookworm AS builder
+FROM golang:1.24-bookworm AS builder
 
 WORKDIR /app
 
-# Fetch dependencies first for layer-cache efficiency.
-# We use go mod tidy + go get to avoid requiring a pre-committed go.sum.
+# Pin the go-duckdb version so builds are reproducible.
+# The module version encodes the bundled DuckDB version:
+#   v2.XYYZZP → DuckDB vX.YY.ZZ  (e.g. v2.10503.1 → DuckDB v1.5.3)
+# Update both this and DUCKDB_VERSION below together.
 COPY go.mod ./
-RUN go get github.com/duckdb/duckdb-go/v2@latest && go mod tidy
+RUN go get github.com/duckdb/duckdb-go/v2@v2.10503.1 && go mod tidy
 
 COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -o /app/server ./cmd/server
 
 # ── Stage 2: Pre-bake DuckDB extensions ───────────────────────────────────
-FROM golang:1.22-bookworm AS extensions
+FROM golang:1.24-bookworm AS extensions
 
-# DUCKDB_VERSION must match the version embedded in github.com/duckdb/duckdb-go/v2.
-#
-# Find it after your first build:
-#   docker build --target builder -t oapif-builder .
-#   docker run --rm oapif-builder /app/server --version  # not implemented, use:
-#   grep -r 'DUCKDB_VERSION\|duckdb_version' \
-#     $(go env GOPATH)/pkg/mod/github.com/duckdb/duckdb-go/v2*/
-#
-# Or check the go-duckdb release notes for the bundled DuckDB version.
-ARG DUCKDB_VERSION=v1.5.2
+# Must match the DuckDB version bundled in go-duckdb (see builder stage comment).
+ARG DUCKDB_VERSION=v1.5.3
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
