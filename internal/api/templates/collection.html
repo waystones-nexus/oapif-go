@@ -38,11 +38,20 @@
 {{if .BboxJS}}
 <script>
 var bbox = {{.BboxJS}};
-var map = L.map('map');
-L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/positron'}).addTo(map);
-var bounds = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]];
-L.rectangle(bounds, {color: '#4338ca', weight: 2, fillOpacity: 0.1}).addTo(map);
-map.fitBounds(bounds, {padding: [20, 20]});
+var map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/positron',
+  bounds: [[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+  fitBoundsOptions: {padding: 40, maxZoom: 14}
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+map.on('load', function() {
+  map.addSource('extent', {type: 'geojson', data: {type: 'Feature', geometry: {
+    type: 'Polygon', coordinates: [[[bbox[0],bbox[1]],[bbox[2],bbox[1]],[bbox[2],bbox[3]],[bbox[0],bbox[3]],[bbox[0],bbox[1]]]]
+  }, properties: {}}});
+  map.addLayer({id: 'ext-fill', type: 'fill', source: 'extent', paint: {'fill-color': '#4338ca', 'fill-opacity': 0.1}});
+  map.addLayer({id: 'ext-line', type: 'line', source: 'extent', paint: {'line-color': '#4338ca', 'line-width': 2}});
+});
 </script>
 {{end}}
 </body>

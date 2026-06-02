@@ -35,24 +35,46 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
-var map = L.map('map');
-L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/positron'}).addTo(map);
+var map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/positron',
+  center: [0, 20], zoom: 2
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
 var feature = {{.FeatureJSON}};
 if (feature && feature.geometry) {
-  var layer = L.geoJSON(feature, {
-    style: {color: '#4338ca', weight: 2, fillOpacity: 0.3},
-    pointToLayer: function(f, ll) {
-      return L.circleMarker(ll, {radius: 8, color: '#4338ca', fillColor: '#4338ca', fillOpacity: 0.7});
+  map.on('load', function() {
+    map.addSource('feature', {type: 'geojson', data: feature});
+    map.addLayer({id: 'f-fill', type: 'fill', source: 'feature',
+      filter: ['==', '$type', 'Polygon'],
+      paint: {'fill-color': '#4338ca', 'fill-opacity': 0.3}});
+    map.addLayer({id: 'f-line', type: 'line', source: 'feature',
+      filter: ['in', '$type', 'Polygon', 'LineString'],
+      paint: {'line-color': '#4338ca', 'line-width': 2}});
+    map.addLayer({id: 'f-circle', type: 'circle', source: 'feature',
+      filter: ['==', '$type', 'Point'],
+      paint: {'circle-color': '#4338ca', 'circle-radius': 8, 'circle-opacity': 0.7,
+              'circle-stroke-width': 2, 'circle-stroke-color': '#fff'}});
+
+    var coords = [];
+    function flatCoords(c) {
+      if (typeof c[0] === 'number') { coords.push(c); } else { c.forEach(flatCoords); }
     }
-  }).addTo(map);
-  try {
-    var b = layer.getBounds();
-    if (b.isValid()) {
-      map.fitBounds(b, {padding: [30, 30], maxZoom: 14});
-    } else {
-      map.setView([0, 0], 2);
+    function walkGeom(geom) {
+      if (!geom) return;
+      if (geom.type === 'GeometryCollection') { geom.geometries.forEach(walkGeom); return; }
+      if (geom.coordinates) flatCoords(geom.coordinates);
     }
-  } catch(e) { map.setView([0, 0], 2); }
+    walkGeom(feature.geometry);
+    if (coords.length > 0) {
+      var lngs = coords.map(function(c) { return c[0]; });
+      var lats = coords.map(function(c) { return c[1]; });
+      map.fitBounds([[Math.min.apply(null, lngs), Math.min.apply(null, lats)],
+                     [Math.max.apply(null, lngs), Math.max.apply(null, lats)]],
+                    {padding: 60, maxZoom: 14});
+    }
+  });
 }
 </script>
 </body>

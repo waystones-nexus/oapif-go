@@ -5,24 +5,40 @@
   <div class="breadcrumb mb-1">
     <a href="{{.BaseURL}}">Home</a> / Collections
   </div>
-  <h2 class="mb-4">Collections</h2>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Collections</h2>
+    <a href="{{.BaseURL}}/collections" class="btn btn-json">JSON</a>
+  </div>
+
+  {{if .BboxJS}}
+  <div id="collections-map" class="mb-4" style="height:300px;border-radius:0.75rem;box-shadow:0 4px 6px -1px rgba(0,0,0,0.08);border:1px solid var(--brand-border)"></div>
+  {{end}}
+
   {{range .Collections}}
   <div class="card mb-3">
     <div class="card-body">
-      <div class="d-flex justify-content-between align-items-start">
-        <div>
+      <div class="d-flex justify-content-between align-items-start gap-3">
+        <div class="flex-grow-1">
           <h3 class="mb-1"><a href="{{$.BaseURL}}/collections/{{.ID}}">{{.Title}}</a></h3>
-          {{if .Description}}<p class="text-muted mb-2">{{.Description}}</p>{{end}}
-          {{if .Extent}}{{if .Extent.Spatial}}
-          <span class="brand-chip">
-            bbox: {{index (index .Extent.Spatial.Bbox 0) 0}},
-                  {{index (index .Extent.Spatial.Bbox 0) 1}},
-                  {{index (index .Extent.Spatial.Bbox 0) 2}},
-                  {{index (index .Extent.Spatial.Bbox 0) 3}}
-          </span>
-          {{end}}{{end}}
+          {{if .Description}}<p class="text-muted mb-2" style="font-size:0.9rem">{{.Description}}</p>{{end}}
+          <div class="d-flex flex-wrap gap-1 mt-1">
+            {{if .Extent}}{{if .Extent.Spatial}}
+            <span class="brand-chip" style="font-size:0.8rem">bbox: {{index (index .Extent.Spatial.Bbox 0) 0}}, {{index (index .Extent.Spatial.Bbox 0) 1}}, {{index (index .Extent.Spatial.Bbox 0) 2}}, {{index (index .Extent.Spatial.Bbox 0) 3}}</span>
+            {{end}}{{end}}
+          </div>
+          {{if .CRS}}
+          <div class="d-flex flex-wrap align-items-center gap-1 mt-1">
+            <span class="text-muted" style="font-size:0.75rem;font-weight:600;letter-spacing:.03em">CRS</span>
+            {{range .CRS}}<span class="brand-chip" style="font-size:0.75rem;padding:0.15rem 0.5rem">{{crsLabel .}}</span>{{end}}
+          </div>
+          {{end}}
+          {{if .Keywords}}
+          <div class="d-flex flex-wrap gap-1 mt-1">
+            {{range .Keywords}}<span class="brand-chip" style="font-size:0.75rem;padding:0.15rem 0.5rem;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">{{.}}</span>{{end}}
+          </div>
+          {{end}}
         </div>
-        <a href="{{$.BaseURL}}/collections/{{.ID}}/items" class="btn btn-primary btn-sm">Explore</a>
+        <a href="{{$.BaseURL}}/collections/{{.ID}}/items" class="btn btn-primary btn-sm flex-shrink-0">Explore →</a>
       </div>
     </div>
   </div>
@@ -33,5 +49,60 @@
 
 {{template "footer" .}}
 {{template "scripts-base" .}}
+{{if .BboxJS}}
+<script>
+var mergedBbox = {{.BboxJS}};
+var colData = {{.CollectionsDataJS}};
+var baseURL = '{{.BaseURL}}';
+
+var map = new maplibregl.Map({
+  container: 'collections-map',
+  style: 'https://tiles.openfreemap.org/styles/positron',
+  center: [0, 20], zoom: 2
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+map.on('load', function() {
+  var features = [];
+  (colData || []).forEach(function(c, i) {
+    if (!c.bbox || c.bbox.length < 4) return;
+    var b = c.bbox;
+    features.push({
+      type: 'Feature', id: i,
+      geometry: {type: 'Polygon', coordinates: [
+        [[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]],[b[0],b[1]]]
+      ]},
+      properties: {id: c.id, title: c.title}
+    });
+  });
+
+  map.addSource('collections', {type: 'geojson', data: {type: 'FeatureCollection', features: features}});
+  map.addLayer({id: 'col-fill', type: 'fill', source: 'collections',
+    paint: {'fill-color': '#4338ca',
+      'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.35, 0.1]}});
+  map.addLayer({id: 'col-line', type: 'line', source: 'collections',
+    paint: {'line-color': '#4338ca', 'line-width': 2}});
+
+  var hoveredId = null;
+  map.on('mousemove', 'col-fill', function(e) {
+    if (e.features.length > 0) {
+      if (hoveredId !== null) map.setFeatureState({source: 'collections', id: hoveredId}, {hover: false});
+      hoveredId = e.features[0].id;
+      map.setFeatureState({source: 'collections', id: hoveredId}, {hover: true});
+    }
+    map.getCanvas().style.cursor = 'pointer';
+  });
+  map.on('mouseleave', 'col-fill', function() {
+    if (hoveredId !== null) { map.setFeatureState({source: 'collections', id: hoveredId}, {hover: false}); hoveredId = null; }
+    map.getCanvas().style.cursor = '';
+  });
+  map.on('click', 'col-fill', function(e) {
+    window.location.href = baseURL + '/collections/' + e.features[0].properties.id + '/items';
+  });
+
+  map.fitBounds([[mergedBbox[0], mergedBbox[1]], [mergedBbox[2], mergedBbox[3]]], {padding: 40, maxZoom: 14});
+});
+</script>
+{{end}}
 </body>
 </html>

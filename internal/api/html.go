@@ -7,14 +7,22 @@ import (
 )
 
 type indexTmplData struct {
-	Title   string
-	BaseURL string
+	Title        string
+	BaseURL      string
+	Description  string
+	Provider     string
+	License      string
+	Keywords     []string
+	ContactEmail string
+	ContactName  string
 }
 
 type collectionsTmplData struct {
-	Title       string
-	BaseURL     string
-	Collections []CollectionInfo
+	Title              string
+	BaseURL            string
+	Collections        []CollectionInfo
+	BboxJS             template.JS // merged extent across all collections; empty if unknown
+	CollectionsDataJS  template.JS // JSON array of {id,title,bbox} for per-collection map rectangles
 }
 
 type collectionTmplData struct {

@@ -40,6 +40,7 @@ type CollectionConfig struct {
 	ID          string                    `json:"id"`
 	Title       string                    `json:"title"`
 	Description string                    `json:"description"`
+	Keywords    []string                  `json:"keywords,omitempty"`
 	ParquetKey  string                    `json:"parquet_key"`
 	GeomColumn    string   `json:"geom_column"`
 	IDColumn      string   `json:"id_column"`
@@ -62,6 +63,15 @@ type Config struct {
 	ServerURL   string
 	ServerTitle string
 
+	// Dataset-level metadata for white-label branding (populated from
+	// COLLECTION_CONFIG_B64 JSON or individual SERVER_* env vars).
+	ServerDescription  string
+	ServerProvider     string
+	ServerLicense      string
+	ServerKeywords     []string
+	ServerContactEmail string
+	ServerContactName  string
+
 	// S3-compatible storage. S3Endpoint is optional — omit for AWS S3,
 	// set to the full URL for R2, MinIO, or any other S3-compatible store.
 	S3Endpoint  string // e.g. https://<id>.r2.cloudflarestorage.com  (optional)
@@ -76,7 +86,43 @@ type Config struct {
 }
 
 type jsonFileConfig struct {
-	Collections []CollectionConfig `json:"collections"`
+	Title        string             `json:"title,omitempty"`
+	Description  string             `json:"description,omitempty"`
+	Provider     string             `json:"provider,omitempty"`
+	License      string             `json:"license,omitempty"`
+	Keywords     []string           `json:"keywords,omitempty"`
+	ContactEmail string             `json:"contact_email,omitempty"`
+	ContactName  string             `json:"contact_name,omitempty"`
+	Collections  []CollectionConfig `json:"collections"`
+}
+
+// applyJSONMeta copies top-level metadata from a parsed jsonFileConfig into cfg.
+// Env vars take priority: fields already set from explicit env vars are not overwritten.
+func applyJSONMeta(cfg *Config, jc *jsonFileConfig) {
+	if len(jc.Collections) > 0 {
+		cfg.Collections = jc.Collections
+	}
+	if jc.Title != "" && os.Getenv("SERVER_TITLE") == "" {
+		cfg.ServerTitle = jc.Title
+	}
+	if jc.Description != "" && cfg.ServerDescription == "" {
+		cfg.ServerDescription = jc.Description
+	}
+	if jc.Provider != "" && cfg.ServerProvider == "" {
+		cfg.ServerProvider = jc.Provider
+	}
+	if jc.License != "" && cfg.ServerLicense == "" {
+		cfg.ServerLicense = jc.License
+	}
+	if len(jc.Keywords) > 0 && len(cfg.ServerKeywords) == 0 {
+		cfg.ServerKeywords = jc.Keywords
+	}
+	if jc.ContactEmail != "" && cfg.ServerContactEmail == "" {
+		cfg.ServerContactEmail = jc.ContactEmail
+	}
+	if jc.ContactName != "" && cfg.ServerContactName == "" {
+		cfg.ServerContactName = jc.ContactName
+	}
 }
 
 func Load() *Config {
@@ -86,10 +132,19 @@ func Load() *Config {
 		ServerURL:   strings.TrimRight(getEnv("SERVER_URL", getEnv("PYGEOAPI_SERVER_URL", "http://localhost:5000")), "/"),
 		ServerTitle: getEnv("SERVER_TITLE", "Waystones OGC API Features"),
 
+		ServerDescription:  getEnv("SERVER_DESCRIPTION", ""),
+		ServerProvider:     getEnv("SERVER_PROVIDER", ""),
+		ServerLicense:      getEnv("SERVER_LICENSE", ""),
+		ServerContactEmail: getEnv("SERVER_CONTACT_EMAIL", ""),
+		ServerContactName:  getEnv("SERVER_CONTACT_NAME", ""),
+
 		S3Endpoint:  getEnv("S3_ENDPOINT", getEnv("AWS_ENDPOINT_URL", os.Getenv("R2_ENDPOINT"))),
 		S3AccessKey: getEnv("S3_ACCESS_KEY_ID", getEnv("AWS_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID"))),
 		S3SecretKey: getEnv("S3_SECRET_ACCESS_KEY", getEnv("AWS_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY"))),
 		S3Bucket:    getEnv("S3_BUCKET", os.Getenv("R2_BUCKET")),
+	}
+	if kw := os.Getenv("SERVER_KEYWORDS"); kw != "" {
+		cfg.ServerKeywords = strings.Split(kw, ",")
 	}
 
 	// Extract hostname for DuckDB's endpoint parameter (no scheme).
@@ -122,8 +177,8 @@ func Load() *Config {
 	configPath := getEnv("CONFIG_PATH", "./config.json")
 	if data, err := os.ReadFile(configPath); err == nil {
 		var jc jsonFileConfig
-		if err := json.Unmarshal(data, &jc); err == nil && len(jc.Collections) > 0 {
-			cfg.Collections = jc.Collections
+		if err := json.Unmarshal(data, &jc); err == nil {
+			applyJSONMeta(cfg, &jc)
 		}
 	}
 
@@ -132,8 +187,8 @@ func Load() *Config {
 	if b64 := os.Getenv("COLLECTION_CONFIG_B64"); b64 != "" && len(cfg.Collections) == 0 {
 		if data, err := base64.StdEncoding.DecodeString(b64); err == nil {
 			var jc jsonFileConfig
-			if err := json.Unmarshal(data, &jc); err == nil && len(jc.Collections) > 0 {
-				cfg.Collections = jc.Collections
+			if err := json.Unmarshal(data, &jc); err == nil {
+				applyJSONMeta(cfg, &jc)
 			}
 		}
 	}
