@@ -25,6 +25,7 @@ type modelLayer struct {
 	Name               string         `json:"name"`
 	Title              string         `json:"title"`
 	Description        string         `json:"description"`
+	Keywords           []string       `json:"keywords,omitempty"`
 	GeometryColumnName string         `json:"geometryColumnName"`
 	PrimaryKeyColumn   string         `json:"primaryKeyColumn"`
 	IsAbstract         bool           `json:"isAbstract"`
@@ -144,6 +145,7 @@ func loadFromModel(path, keyPrefix string) ([]CollectionConfig, string, error) {
 			ID:           id,
 			Title:        title,
 			Description:  layer.Description,
+			Keywords:     layer.Keywords,
 			ParquetKey:   parquetKey,
 			GeomColumn:   geomCol,
 			IDColumn:     idCol,
