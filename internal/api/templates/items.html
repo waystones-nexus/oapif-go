@@ -2,8 +2,14 @@
 {{template "nav" .}}
 
 <main class="container">
-  <div class="breadcrumb mb-1">
-    <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items
+  <div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-2">
+    <div class="breadcrumb mb-0">
+      <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items
+    </div>
+    <div class="d-flex gap-2">
+      <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
+      <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json btn-sm">JSON</a>
+    </div>
   </div>
   <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
     <div class="d-flex align-items-center gap-2 flex-wrap">
@@ -32,10 +38,6 @@
         <option value="1000" {{if eq .Limit 1000}}selected{{end}}>1000</option>
       </select>
     </label>
-    <div class="ms-auto d-flex gap-2">
-      <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
-      <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json btn-sm">JSON</a>
-    </div>
   </div>
 
   <div id="filter-panel" class="card mb-3" style="display:none">
