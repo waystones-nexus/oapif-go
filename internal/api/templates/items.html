@@ -244,22 +244,20 @@ document.addEventListener('click',function(e){
 // ── Map setup (layers added once; sources updated on each page) ────────────────
 map.on('load', function() {
   map.addSource('features',{type:'geojson',data:toFC(features)});
-  var polyTypes = ['Polygon','MultiPolygon'];
-  var lineTypes = ['LineString','MultiLineString'];
-  var pointTypes = ['Point','MultiPoint'];
-  function inTypes(types) { return ['match',['geometry-type'],types,true,false]; }
 
+  // fill/line/circle layers work without explicit geometry-type filters:
+  // MapLibre fill layers only render Polygon/MultiPolygon; line layers only render
+  // LineString/MultiLineString/Polygon; circle layers render for all types so we
+  // keep a filter there to avoid circles appearing on polygon/line features.
   map.addLayer({id:'feat-fill',type:'fill',source:'features',
-    filter:inTypes(polyTypes),
     paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.65,['boolean',['feature-state','hover'],false],0.45,0.2]}});
   map.addLayer({id:'feat-fill-selected',type:'line',source:'features',
-    filter:inTypes(polyTypes),
+    filter:['in','$type','Polygon'],
     paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],3,0],'line-opacity':1}});
   map.addLayer({id:'feat-line',type:'line',source:'features',
-    filter:inTypes(polyTypes.concat(lineTypes)),
     paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],4,['interpolate',['linear'],['zoom'],4,1.5,10,2.5]]}});
   map.addLayer({id:'feat-circle',type:'circle',source:'features',
-    filter:inTypes(pointTypes),
+    filter:['in','$type','Point'],
     paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','selected'],false],10,['boolean',['feature-state','hover'],false],8,6],
       'circle-opacity':0.85,'circle-stroke-width':['case',['boolean',['feature-state','selected'],false],2.5,1.5],'circle-stroke-color':'#fff'}});
   map.addSource('centroids',{type:'geojson',data:toCentroids(features)});
