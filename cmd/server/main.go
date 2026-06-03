@@ -86,15 +86,19 @@ func main() {
 		log.Fatalf("[startup] configure R2: %v", err)
 	}
 
-	// Detect schema for collections that had no sidecar.
+	// Detect schema for collections that had no sidecar; fix geometry type for all.
 	// needsDetection only covers collections present at startup; collections
-	// added later by lazy-init (i >= len) always need detection.
+	// added later by lazy-init (i >= len) always need full detection.
 	for i := range cfg.Collections {
-		if i < len(needsDetection) && !needsDetection[i] {
-			continue
-		}
 		c := &cfg.Collections[i]
 		tCol := time.Now()
+		if i < len(needsDetection) && !needsDetection[i] {
+			// Sidecar loaded — only fix up geometry type from GeoParquet metadata,
+			// since the sidecar may have stored "polygon" when WKB type detection failed.
+			store.DetectGeomType(ctx, c, cfg.S3Bucket)
+			log.Printf("[startup] %dms - %s: geom type corrected to %q (%dms)", time.Since(startTime).Milliseconds(), c.ID, c.GeometryType, time.Since(tCol).Milliseconds())
+			continue
+		}
 		if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
 			log.Printf("[init] warn: detect columns for %s: %v", c.ID, err)
 		}

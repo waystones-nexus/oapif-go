@@ -59,14 +59,15 @@
     </div>
   </div>
 
-  <div class="d-flex gap-2 mb-3">
+  <div class="d-flex gap-2 mb-3 justify-content-end">
     <a id="prev-btn-top" href="{{.PrevHref}}" class="btn btn-json"{{if not .PrevHref}} style="display:none"{{end}}>← Previous</a>
     <a id="next-btn-top" href="{{.NextHref}}" class="btn btn-primary"{{if not .NextHref}} style="display:none"{{end}}>Next →</a>
   </div>
 
   <div class="card">
     <div class="card-body p-0">
-      <div class="table-responsive">
+      <div id="table-scroll-top" style="overflow-x:auto;overflow-y:hidden;height:12px;margin-bottom:-1px"><div id="table-scroll-sizer" style="height:1px"></div></div>
+      <div class="table-responsive" id="table-scroll-main">
         <table class="table table-hover mb-0" id="features-table">
           <thead><tr id="thead-row"></tr></thead>
           <tbody id="tbody"></tbody>
@@ -75,7 +76,7 @@
     </div>
   </div>
 
-  <div class="d-flex gap-2 mt-3">
+  <div class="d-flex gap-2 mt-3 justify-content-end">
     <a id="prev-btn-bot" href="{{.PrevHref}}" class="btn btn-json"{{if not .PrevHref}} style="display:none"{{end}}>← Previous</a>
     <a id="next-btn-bot" href="{{.NextHref}}" class="btn btn-primary"{{if not .NextHref}} style="display:none"{{end}}>Next →</a>
   </div>
@@ -142,6 +143,7 @@ function renderTable(feats) {
   }
   var props=Object.keys(feats[0].properties||{}).filter(function(p){return!p.match(/^bbox_/i);});
   document.getElementById('thead-row').innerHTML='<th>ID</th>'+props.map(function(p){return'<th>'+p+'</th>';}).join('');
+  setTimeout(syncScrollerWidth, 0);
   document.getElementById('tbody').innerHTML=feats.map(function(f,i){
     var cells=props.map(function(p){var v=f.properties[p];return'<td>'+(v===null||v===undefined?'':v)+'</td>';}).join('');
     var id=f.id!==undefined?f.id:'';
@@ -256,6 +258,18 @@ map.on('load', function() {
     map.on('mouseleave',lid,function(){if(!drawMode){clearHover();map.getCanvas().style.cursor='';}});
   });
 });
+
+// ── Top scrollbar sync ────────────────────────────────────────────────────────
+var topScroll = document.getElementById('table-scroll-top');
+var mainScroll = document.getElementById('table-scroll-main');
+var scrollSizer = document.getElementById('table-scroll-sizer');
+function syncScrollerWidth() {
+  var t = document.getElementById('features-table');
+  scrollSizer.style.width = t ? t.offsetWidth + 'px' : '100%';
+}
+topScroll.addEventListener('scroll', function() { mainScroll.scrollLeft = topScroll.scrollLeft; });
+mainScroll.addEventListener('scroll', function() { topScroll.scrollLeft = mainScroll.scrollLeft; });
+new ResizeObserver(syncScrollerWidth).observe(document.getElementById('features-table') || document.body);
 
 // Initial table render
 renderTable(features);

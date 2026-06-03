@@ -200,6 +200,40 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 	return nil
 }
 
+// DetectGeomType reads only the GeoParquet `geo` footer metadata to set col.GeometryType.
+// It is fast (no row scan) and is called after ApplySidecar so that stale sidecar values
+// (e.g. "polygon" written when WKB geometry type detection failed) are corrected.
+func (s *Store) DetectGeomType(ctx context.Context, col *config.CollectionConfig, bucket string) {
+	purl := parquetURL(bucket, col.ParquetKey)
+	type geoColMeta struct {
+		GeometryTypes []string `json:"geometry_types"`
+	}
+	type geoMeta struct {
+		PrimaryColumn string                `json:"primary_column"`
+		Columns       map[string]geoColMeta `json:"columns"`
+	}
+	var rawGeo interface{}
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT value FROM parquet_kv_metadata('%s') WHERE key='geo'", purl,
+	)).Scan(&rawGeo); err != nil {
+		return
+	}
+	var b []byte
+	switch v := rawGeo.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	}
+	var geo geoMeta
+	if err := json.Unmarshal(b, &geo); err != nil {
+		return
+	}
+	if cm, ok := geo.Columns[col.GeomColumn]; ok && len(cm.GeometryTypes) > 0 {
+		col.GeometryType = simplifyGeomType(cm.GeometryTypes[0])
+	}
+}
+
 // simplifyGeomType maps GeoParquet geometry type strings to one of "polygon", "line", "point".
 func simplifyGeomType(t string) string {
 	switch strings.ToLower(t) {
