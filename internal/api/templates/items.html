@@ -19,12 +19,10 @@
     </div>
   </div>
 
-  <div class="d-flex gap-2 align-items-center flex-wrap mb-3">
-    <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
-    <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
-    <button id="draw-bbox-btn" class="btn btn-json btn-sm" style="display:none">Draw Bbox</button>
-    <button id="draw-poly-btn" class="btn btn-json btn-sm" style="display:none">Draw Polygon</button>
-    <label class="d-flex align-items-center gap-1 text-muted small mb-0">
+  <div class="d-flex gap-2 align-items-center flex-wrap mb-3 w-100">
+    <button id="filter-toggle" class="btn btn-json btn-sm{{if .Filter}} btn-active{{end}}">Filter ▾</button>
+    <button id="cols-toggle" class="btn btn-json btn-sm{{if .Properties}} btn-active{{end}}">Columns ▾</button>
+    <label class="d-flex align-items-center gap-1 text-muted small mb-0 ms-2">
       Limit
       <select id="limit-sel" class="form-select form-select-sm d-inline-block" style="width:auto">
         <option value="10" {{if eq .Limit 10}}selected{{end}}>10</option>
@@ -34,14 +32,10 @@
         <option value="1000" {{if eq .Limit 1000}}selected{{end}}>1000</option>
       </select>
     </label>
-    <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
-    <button id="filter-toggle" class="btn btn-json btn-sm{{if .Filter}} btn-active{{end}}">Filter ▾</button>
-    <button id="cols-toggle" class="btn btn-json btn-sm{{if .Properties}} btn-active{{end}}">Columns ▾</button>
-    <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json">JSON</a>
-  </div>
-
-  <div id="poly-hint" class="alert alert-info py-2 px-3 mb-3 small" style="display:none">
-    <strong>Drawing polygon</strong> — click to add vertices · click first point or double-click to finish · <kbd>Esc</kbd> to cancel
+    <div class="ms-auto d-flex gap-2">
+      <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
+      <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json btn-sm">JSON</a>
+    </div>
   </div>
 
   <div id="filter-panel" class="card mb-3" style="display:none">
@@ -67,6 +61,18 @@
         <button onclick="resetColumns()" class="btn btn-json btn-sm">Reset</button>
       </div>
     </div>
+  </div>
+
+  <div class="d-flex gap-2 align-items-center flex-wrap mb-2">
+    <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
+    <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
+    <button id="draw-bbox-btn" class="btn btn-json btn-sm" style="display:none">Draw Bbox</button>
+    <button id="draw-poly-btn" class="btn btn-json btn-sm" style="display:none">Draw Polygon</button>
+    <button id="finish-poly-btn" class="btn btn-primary btn-sm" style="display:none">Finish Polygon</button>
+  </div>
+
+  <div id="poly-hint" class="alert alert-info py-2 px-3 mb-3 small" style="display:none">
+    <strong>Drawing polygon</strong> — tap/click to add vertices · click Finish or double-click to finish · <kbd>Esc</kbd> to cancel
   </div>
 
   <div id="map" class="mb-3"></div>
@@ -278,10 +284,15 @@ function setPolyMode(on) {
   else    { map.dragPan.enable();  map.doubleClickZoom.enable(); }
   document.getElementById('poly-hint').style.display = on ? '' : 'none';
   var btn = document.getElementById('draw-poly-btn');
-  if (on) { btn.textContent = 'Cancel polygon'; btn.classList.add('drawing'); }
-  else    { btn.textContent = 'Draw Polygon';   btn.classList.remove('drawing'); }
+  var finishBtn = document.getElementById('finish-poly-btn');
+  if (on) { btn.textContent = 'Cancel polygon'; btn.classList.add('drawing'); finishBtn.style.display=''; }
+  else    { btn.textContent = 'Draw Polygon';   btn.classList.remove('drawing'); finishBtn.style.display='none'; }
   refreshDrawLayers(null);
 }
+
+document.getElementById('finish-poly-btn').onclick = function() {
+  if (polyMode && polyVerts.length >= 3) commitPolygon();
+};
 
 function refreshDrawLayers(mouse) {
   if (!map.getSource('draw-fill')) return;
@@ -482,27 +493,56 @@ function exitBboxDraw(){
   var btn=document.getElementById('draw-bbox-btn'); btn.textContent='Draw Bbox'; btn.style.background='';
 }
 var canvas=map.getCanvas();
-canvas.addEventListener('mousedown',function(e){
-  if(!bboxDrawMode)return; e.preventDefault();
-  bboxStart={x:e.offsetX,y:e.offsetY,ll:map.unproject([e.offsetX,e.offsetY])};
+
+function getCanvasCoords(e) {
+  var rect = canvas.getBoundingClientRect();
+  if (e.touches && e.touches.length > 0) {
+    return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+  }
+  return { x: e.offsetX, y: e.offsetY };
+}
+
+function handleBboxStart(e) {
+  if(!bboxDrawMode)return;
+  if (e.touches) { e.preventDefault(); }
+  var coords = getCanvasCoords(e);
+  bboxStart={x:coords.x,y:coords.y,ll:map.unproject([coords.x,coords.y])};
   bboxRectEl.style.cssText='position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;z-index:5';
-  bboxRectEl.style.left=e.offsetX+'px'; bboxRectEl.style.top=e.offsetY+'px'; bboxRectEl.style.width='0'; bboxRectEl.style.height='0';
-});
-canvas.addEventListener('mousemove',function(e){
+  bboxRectEl.style.left=coords.x+'px'; bboxRectEl.style.top=coords.y+'px'; bboxRectEl.style.width='0'; bboxRectEl.style.height='0';
+}
+
+function handleBboxMove(e) {
   if(!bboxDrawMode||!bboxStart)return;
-  var x=Math.min(bboxStart.x,e.offsetX),y=Math.min(bboxStart.y,e.offsetY);
+  if (e.touches) { e.preventDefault(); }
+  var coords = getCanvasCoords(e);
+  var x=Math.min(bboxStart.x,coords.x),y=Math.min(bboxStart.y,coords.y);
   bboxRectEl.style.left=x+'px'; bboxRectEl.style.top=y+'px';
-  bboxRectEl.style.width=Math.abs(e.offsetX-bboxStart.x)+'px'; bboxRectEl.style.height=Math.abs(e.offsetY-bboxStart.y)+'px';
-});
-canvas.addEventListener('mouseup',function(e){
+  bboxRectEl.style.width=Math.abs(coords.x-bboxStart.x)+'px'; bboxRectEl.style.height=Math.abs(coords.y-bboxStart.y)+'px';
+}
+
+function handleBboxEnd(e) {
   if(!bboxDrawMode||!bboxStart)return;
-  var endLL=map.unproject([e.offsetX,e.offsetY]);
+  var coords;
+  if (e.changedTouches && e.changedTouches.length > 0) {
+      var rect = canvas.getBoundingClientRect();
+      coords = { x: e.changedTouches[0].clientX - rect.left, y: e.changedTouches[0].clientY - rect.top };
+  } else {
+      coords = getCanvasCoords(e);
+  }
+  var endLL=map.unproject([coords.x,coords.y]);
   var bbox=[Math.min(bboxStart.ll.lng,endLL.lng),Math.min(bboxStart.ll.lat,endLL.lat),
     Math.max(bboxStart.ll.lng,endLL.lng),Math.max(bboxStart.ll.lat,endLL.lat)].map(function(v){return v.toFixed(6);}).join(',');
   exitBboxDraw();
   var url=new URL(window.location.href); url.searchParams.set('bbox',bbox); url.searchParams.delete('offset');
   window.location.href=url.toString();
-});
+}
+
+canvas.addEventListener('mousedown',handleBboxStart);
+canvas.addEventListener('touchstart',handleBboxStart, {passive: false});
+canvas.addEventListener('mousemove',handleBboxMove);
+canvas.addEventListener('touchmove',handleBboxMove, {passive: false});
+canvas.addEventListener('mouseup',handleBboxEnd);
+canvas.addEventListener('touchend',handleBboxEnd);
 
 // ── Draw Polygon button ───────────────────────────────────────────────────────
 document.getElementById('draw-poly-btn').onclick=function(){
