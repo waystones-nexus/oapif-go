@@ -34,14 +34,15 @@ type Extent struct {
 }
 
 type CollectionInfo struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	Keywords    []string `json:"keywords,omitempty"`
-	Extent      *Extent  `json:"extent,omitempty"`
-	Links       []Link   `json:"links"`
-	CRS         []string `json:"crs,omitempty"`
-	StorageCRS  string   `json:"storageCRS,omitempty"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description,omitempty"`
+	Keywords     []string `json:"keywords,omitempty"`
+	GeometryType string   `json:"geometry_type,omitempty"` // "polygon", "line", or "point"
+	Extent       *Extent  `json:"extent,omitempty"`
+	Links        []Link   `json:"links"`
+	CRS          []string `json:"crs,omitempty"`
+	StorageCRS   string   `json:"storageCRS,omitempty"`
 }
 
 type CollectionsResponse struct {

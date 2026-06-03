@@ -19,7 +19,10 @@
     <div class="card-body">
       <div class="d-flex justify-content-between align-items-start gap-3">
         <div class="flex-grow-1">
-          <h3 class="mb-1"><a href="{{$.BaseURL}}/collections/{{.ID}}">{{.Title}}</a></h3>
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+            <h3 class="mb-0"><a href="{{$.BaseURL}}/collections/{{.ID}}">{{.Title}}</a></h3>
+            {{if .GeometryType}}<span class="brand-chip" style="font-size:0.75rem;display:inline-flex;align-items:center;padding:0.15rem 0.5rem">{{geomIcon .GeometryType}}{{.GeometryType}}</span>{{end}}
+          </div>
           {{if .Description}}<p class="text-muted mb-2" style="font-size:0.9rem">{{.Description}}</p>{{end}}
           <div class="d-flex flex-wrap gap-1 mt-1">
             {{if .Extent}}{{if .Extent.Spatial}}

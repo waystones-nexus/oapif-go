@@ -39,6 +39,9 @@ func ApplySidecar(col *config.CollectionConfig, sc *config.MetaSidecar) {
 	col.IDColumn = sc.IDColumn
 	col.GeomIsNative = sc.GeomIsNative
 	col.BboxColsStyle = sc.BboxColsStyle
+	if sc.GeometryType != "" {
+		col.GeometryType = sc.GeometryType
+	}
 	if sc.DatetimeColumn != nil {
 		col.DatetimeColumn = *sc.DatetimeColumn
 	}

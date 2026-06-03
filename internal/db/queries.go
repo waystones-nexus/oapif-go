@@ -46,12 +46,13 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 
 	// Read GeoParquet spec `geo` key-value metadata (parquet file footer, no row scan).
 	type geoColMeta struct {
-		Encoding string    `json:"encoding"`
-		Bbox     []float64 `json:"bbox"`
+		Encoding      string    `json:"encoding"`
+		Bbox          []float64 `json:"bbox"`
+		GeometryTypes []string  `json:"geometry_types"`
 	}
 	type geoMeta struct {
-		PrimaryColumn string                 `json:"primary_column"`
-		Columns       map[string]geoColMeta  `json:"columns"`
+		PrimaryColumn string                `json:"primary_column"`
+		Columns       map[string]geoColMeta `json:"columns"`
 	}
 	var geo geoMeta
 	var rawGeo interface{}
@@ -189,7 +190,26 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
+	// Detect geometry type from GeoParquet metadata.
+	if col.GeometryType == "" {
+		if cm, ok := geo.Columns[col.GeomColumn]; ok && len(cm.GeometryTypes) > 0 {
+			col.GeometryType = simplifyGeomType(cm.GeometryTypes[0])
+		}
+	}
+
 	return nil
+}
+
+// simplifyGeomType maps GeoParquet geometry type strings to one of "polygon", "line", "point".
+func simplifyGeomType(t string) string {
+	switch strings.ToLower(t) {
+	case "point", "multipoint":
+		return "point"
+	case "linestring", "multilinestring":
+		return "line"
+	default:
+		return "polygon"
+	}
 }
 
 // geomExpr returns the SQL expression that produces a DuckDB GEOMETRY value from the geometry column.

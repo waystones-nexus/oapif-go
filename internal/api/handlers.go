@@ -123,6 +123,17 @@ func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handl
 		"faviconURL": func() string {
 			return cfg.Brand.FaviconURL
 		},
+		// geomIcon returns a small inline SVG for polygon/line/point geometry types.
+		"geomIcon": func(t string) template.HTML {
+			switch t {
+			case "point":
+				return `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="vertical-align:middle;margin-right:4px"><circle cx="7" cy="7" r="4.5" fill="currentColor" opacity="0.85"/></svg>`
+			case "line":
+				return `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="vertical-align:middle;margin-right:4px"><path d="M1 12 L5 4 L9 8 L13 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+			default: // polygon
+				return `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="vertical-align:middle;margin-right:4px"><rect x="1.5" y="1.5" width="11" height="11" rx="1" fill="currentColor" opacity="0.2" stroke="currentColor" stroke-width="1.5"/></svg>`
+			}
+		},
 	}
 	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{
@@ -575,10 +586,11 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 
 func buildCollectionInfo(col *config.CollectionConfig, base string) CollectionInfo {
 	return CollectionInfo{
-		ID:          col.ID,
-		Title:       col.Title,
-		Description: col.Description,
-		Keywords:    col.Keywords,
+		ID:           col.ID,
+		Title:        col.Title,
+		Description:  col.Description,
+		Keywords:     col.Keywords,
+		GeometryType: col.GeometryType,
 		Extent: &Extent{
 			Spatial: &SpatialExtent{
 				Bbox: [][]float64{{col.Extent[0], col.Extent[1], col.Extent[2], col.Extent[3]}},

@@ -58,6 +58,9 @@ type CollectionConfig struct {
 	BboxColsStyle string
 	// DatetimeColumn is set by DetectColumns; empty if no timestamp column found.
 	DatetimeColumn string
+	// GeometryType is the simplified geometry type: "polygon", "line", or "point".
+	// Set by DetectColumns from GeoParquet metadata; empty if unknown.
+	GeometryType string
 	// FeatureCount is the total row count loaded from the sidecar (0 = not cached).
 	// Used by QueryItems to skip the COUNT(*) query on unfiltered requests.
 	FeatureCount int64

@@ -78,7 +78,7 @@ if (feature && feature.geometry) {
       var lngs = coords.map(function(c) { return c[0]; });
       var lats = coords.map(function(c) { return c[1]; });
       map.fitBounds([[Math.min.apply(null,lngs),Math.min.apply(null,lats)],[Math.max.apply(null,lngs),Math.max.apply(null,lats)]],
-                    {padding: 60, maxZoom: 14});
+                    {padding: 60, maxZoom: 14, animate: false});
     }
   });
 }

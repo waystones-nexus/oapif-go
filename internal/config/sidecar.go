@@ -13,7 +13,8 @@ type MetaSidecar struct {
 	GeomColumn     string             `json:"geom_column"`
 	IDColumn       string             `json:"id_column"`
 	GeomIsNative   bool               `json:"geom_is_native"`
-	BboxColsStyle  string             `json:"bbox_cols_style"` // "flat", "struct", or ""
+	BboxColsStyle  string             `json:"bbox_cols_style"`  // "flat", "struct", or ""
+	GeometryType   string             `json:"geometry_type"`    // "polygon", "line", or "point"
 	DatetimeColumn *string            `json:"datetime_column"`
 	Queryables     []SidecarQueryable `json:"queryables"`
 }

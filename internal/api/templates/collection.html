@@ -11,6 +11,12 @@
         <div class="card-header">{{.Col.Title}}</div>
         <div class="card-body">
           {{if .Col.Description}}<p>{{.Col.Description}}</p>{{end}}
+          <div class="d-flex flex-wrap gap-1 mb-2">
+            {{if .Col.GeometryType}}
+            <span class="brand-chip" style="font-size:0.78rem;display:inline-flex;align-items:center">{{geomIcon .Col.GeometryType}}{{.Col.GeometryType}}</span>
+            {{end}}
+            {{range .Col.Keywords}}<span class="brand-chip" style="font-size:0.75rem;padding:0.15rem 0.5rem;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">{{.}}</span>{{end}}
+          </div>
           {{if .Col.Extent}}{{if .Col.Extent.Spatial}}
           <p><strong>Extent:</strong>
             <span class="brand-chip">

@@ -73,6 +73,10 @@
     /* Panels that appear inline should not lift on hover */
     #feat-panel, #filter-panel { transition: box-shadow 0.2s ease, border-color 0.2s ease; }
     #feat-panel:hover, #filter-panel:hover { transform: none; box-shadow: var(--shadow-sm); }
+    /* Fixed table layout stops columns reflowing when different features are selected */
+    #panel-table { table-layout: fixed; width: 100%; }
+    #panel-table td:first-child { width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #panel-table td:last-child  { width: 62%; word-break: break-word; }
     .card-header {
       background: var(--brand-light);
       border-bottom: 1px solid var(--brand-border);
