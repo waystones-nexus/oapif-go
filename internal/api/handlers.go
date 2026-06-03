@@ -92,9 +92,15 @@ type Handler struct {
 	tmpls       *template.Template
 }
 
-// SetDB sets the DuckDB store and signals readiness to all waiting handlers.
+// SetDB sets the DuckDB store, fixes up geometry types from GeoParquet metadata for
+// all current collections (including those loaded via lazy-init before DuckDB was ready),
+// then signals readiness to all waiting handlers.
 // Must be called exactly once, after DuckDB init and warmup are complete.
 func (h *Handler) SetDB(store *db.Store) {
+	ctx := context.Background()
+	for i := range h.cfg.Collections {
+		store.DetectGeomType(ctx, &h.cfg.Collections[i], h.cfg.S3Bucket)
+	}
 	h.store = store // happens-before close(h.dbReady) per Go memory model
 	close(h.dbReady)
 }
