@@ -2,7 +2,10 @@
 
 A high-performance, lightweight OGC API Features (OAPIF) server written in Go, backed by DuckDB + GeoParquet, and optimized for serverless deployments on Cloudflare R2 or standard AWS S3.
 
+**Demo:** [demo.waystones.cloud](https://demo.waystones.cloud)
+
 Designed as a modern, compilation-backed alternative to Python-based runtimes like `pygeoapi`, `oapif-go` achieves **sub-300ms container cold starts** and lightning-fast spatial queries directly on parquet datasets without the overhead of a dedicated spatial database.
+
 
 ---
 
