@@ -1,3 +1,53 @@
-:5000 {
-    reverse_proxy localhost:{env.CONTAINER_PORT}
+http://:5000 {
+    # Health check — no auth, no cache headers.
+    handle /health {
+        reverse_proxy localhost:{$CONTAINER_PORT}
+    }
+
+    route {
+        # Private deployment guard: require X-API-Key unless IS_PRIVATE is explicitly "0".
+        # Fail-closed: missing IS_PRIVATE denies access.
+        # CADDY_API_KEYS_REGEX is a "|"-joined alternation of hex keys;
+        # "__no_active_keys__" sentinel rejects all keys until one is created.
+        @privateNoHeader {
+            expression `"{$IS_PRIVATE}" != "0"`
+            not header X-API-Key *
+        }
+        @privateBadHeader {
+            expression `"{$IS_PRIVATE}" != "0"`
+            header X-API-Key *
+            not header_regexp X-API-Key ^({$CADDY_API_KEYS_REGEX})$
+        }
+        respond @privateNoHeader "Unauthorized" 401
+        respond @privateBadHeader "Unauthorized" 401
+
+        # Non-public deployments must never be cached by any proxy or CDN.
+        @private expression `"{$IS_PRIVATE}" != "0"`
+        header @private Cache-Control "no-store"
+
+        # WMS via QGIS Server — only active when DEPLOY_QGIS=1.
+        @hasQgis expression `"{$DEPLOY_QGIS}" == "1"`
+        handle /ows/* {
+            route @hasQgis {
+                reverse_proxy {$QGIS_UPSTREAM_TARGET:qgis-server:80} {
+                    header_up Host {upstream_hostport}
+                    header_up X-Forwarded-Proto {header.X-Forwarded-Proto}
+                    header_up -X-Forwarded-Ssl
+                    header_up -X-Forwarded-Protocol
+                    header_up -X-Scheme
+                }
+            }
+            respond 404
+        }
+
+        # OGC API Features — oapif-go.
+        handle {
+            reverse_proxy localhost:{$CONTAINER_PORT} {
+                header_up X-Forwarded-Proto {header.X-Forwarded-Proto}
+                header_up -X-Forwarded-Ssl
+                header_up -X-Forwarded-Protocol
+                header_up -X-Scheme
+            }
+        }
+    }
 }
