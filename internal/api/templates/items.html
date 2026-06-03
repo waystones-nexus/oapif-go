@@ -255,7 +255,10 @@ map.on('load', function() {
     filter:['in','$type','Polygon'],
     paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],3,0],'line-opacity':1}});
   map.addLayer({id:'feat-line',type:'line',source:'features',
-    paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],4,['interpolate',['linear'],['zoom'],4,1.5,10,2.5]]}});
+    paint:{'line-color':brandColor,
+      'line-width':['interpolate',['linear'],['zoom'],
+        4,['case',['boolean',['feature-state','selected'],false],4,1.5],
+        10,['case',['boolean',['feature-state','selected'],false],6,2.5]]}});
   map.addLayer({id:'feat-circle',type:'circle',source:'features',
     filter:['in','$type','Point'],
     paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','selected'],false],10,['boolean',['feature-state','hover'],false],8,6],
