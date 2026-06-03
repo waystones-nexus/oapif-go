@@ -85,7 +85,7 @@ func tokenize(input string) ([]token, error) {
 			continue
 		}
 
-		// Numbers
+		// Numbers (including negative numbers)
 		if unicode.IsDigit(ch) || (ch == '-' && i+1 < n && unicode.IsDigit(runes[i+1])) {
 			j := i
 			if runes[j] == '-' {
@@ -190,6 +190,22 @@ type BetweenExpr struct {
 	Not  bool
 }
 
+// SpatialExpr represents a spatial predicate: S_INTERSECTS(prop, geom).
+// GeomSQL is a DuckDB SQL fragment for the geometry literal (e.g. ST_GeomFromText('...') or ST_MakeEnvelope(...)).
+type SpatialExpr struct {
+	Op      string // "S_INTERSECTS", "S_WITHIN", "S_CONTAINS", "S_DISJOINT", "S_OVERLAPS", "S_TOUCHES", "S_CROSSES", "S_EQUALS"
+	Prop    string // geometry property / column reference
+	GeomSQL string // DuckDB SQL for the literal geometry
+}
+
+// TemporalExpr represents a temporal predicate: T_AFTER(prop, TIMESTAMP('...')).
+type TemporalExpr struct {
+	Op   string // "T_AFTER", "T_BEFORE", "T_DURING", "T_EQUALS"
+	Prop string // datetime property reference
+	Low  string // ISO 8601 timestamp string
+	High string // ISO 8601 timestamp string (T_DURING only)
+}
+
 type Literal struct {
 	Kind string // "string" | "number" | "bool" | "null"
 	Str  string
@@ -197,13 +213,15 @@ type Literal struct {
 	Bool bool
 }
 
-func (*LogicalExpr) exprNode() {}
-func (*NotExpr) exprNode()     {}
-func (*CompareExpr) exprNode() {}
-func (*LikeExpr) exprNode()    {}
-func (*IsNullExpr) exprNode()  {}
-func (*InExpr) exprNode()      {}
-func (*BetweenExpr) exprNode() {}
+func (*LogicalExpr) exprNode()  {}
+func (*NotExpr) exprNode()      {}
+func (*CompareExpr) exprNode()  {}
+func (*LikeExpr) exprNode()     {}
+func (*IsNullExpr) exprNode()   {}
+func (*InExpr) exprNode()       {}
+func (*BetweenExpr) exprNode()  {}
+func (*SpatialExpr) exprNode()  {}
+func (*TemporalExpr) exprNode() {}
 
 // ---------------------------------------------------------------------------
 // Parser
@@ -233,6 +251,14 @@ func (p *parser) expectIdent(word string) error {
 	t := p.next()
 	if t.kind != tokIdent || !strings.EqualFold(t.value, word) {
 		return fmt.Errorf("expected %q, got %q", word, t.value)
+	}
+	return nil
+}
+
+func (p *parser) expectKind(kind tokenKind, name string) error {
+	t := p.next()
+	if t.kind != kind {
+		return fmt.Errorf("expected %s, got %q", name, t.value)
 	}
 	return nil
 }
@@ -306,6 +332,15 @@ func (p *parser) parseNot() (Expr, error) {
 	return p.parseAtom()
 }
 
+// nextTokenIs returns true if the token at pos+offset is of the given kind.
+func (p *parser) tokenAt(offset int) token {
+	idx := p.pos + offset
+	if idx < len(p.tokens) {
+		return p.tokens[idx]
+	}
+	return token{kind: tokEOF}
+}
+
 func (p *parser) parseAtom() (Expr, error) {
 	if p.peek().kind == tokLParen {
 		p.next()
@@ -319,6 +354,19 @@ func (p *parser) parseAtom() (Expr, error) {
 		p.next()
 		return expr, nil
 	}
+
+	// Spatial / temporal function calls: KEYWORD followed by '('
+	if p.peek().kind == tokIdent && p.tokenAt(1).kind == tokLParen {
+		upper := strings.ToUpper(p.peek().value)
+		switch upper {
+		case "S_INTERSECTS", "S_WITHIN", "S_CONTAINS", "S_DISJOINT",
+			"S_OVERLAPS", "S_TOUCHES", "S_CROSSES", "S_EQUALS":
+			return p.parseSpatialExpr()
+		case "T_AFTER", "T_BEFORE", "T_DURING", "T_EQUALS":
+			return p.parseTemporalExpr()
+		}
+	}
+
 	return p.parsePredicate()
 }
 
@@ -499,42 +547,264 @@ func (p *parser) parseLiteral() (Literal, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Spatial predicate parsing
+// ---------------------------------------------------------------------------
+
+// parseSpatialExpr parses: S_INTERSECTS(prop, geom_literal)
+func (p *parser) parseSpatialExpr() (Expr, error) {
+	op := strings.ToUpper(p.next().value) // consume function name
+	if err := p.expectKind(tokLParen, "'('"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	// First arg: property / column reference
+	propTok := p.next()
+	if propTok.kind != tokIdent && propTok.kind != tokQIdent {
+		return nil, fmt.Errorf("%s arg1: expected property name, got %q", op, propTok.value)
+	}
+	prop := propTok.value
+
+	if err := p.expectKind(tokComma, "','"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	// Second arg: geometry literal
+	geomSQL, err := p.parseGeomLiteral()
+	if err != nil {
+		return nil, fmt.Errorf("%s arg2: %w", op, err)
+	}
+
+	if err := p.expectKind(tokRParen, "')'"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return &SpatialExpr{Op: op, Prop: prop, GeomSQL: geomSQL}, nil
+}
+
+// parseGeomLiteral parses a geometry literal: BBOX(...) or WKT geometry.
+// Returns a DuckDB SQL fragment.
+func (p *parser) parseGeomLiteral() (string, error) {
+	t := p.next()
+	if t.kind != tokIdent {
+		return "", fmt.Errorf("expected geometry type or BBOX, got %q", t.value)
+	}
+	upper := strings.ToUpper(t.value)
+
+	switch upper {
+	case "BBOX":
+		return p.parseBboxGeom()
+	case "POINT", "LINESTRING", "POLYGON",
+		"MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON",
+		"GEOMETRYCOLLECTION":
+		return p.parseWKTGeom(upper)
+	default:
+		return "", fmt.Errorf("unknown geometry type %q", t.value)
+	}
+}
+
+// parseBboxGeom parses BBOX(minx, miny, maxx, maxy) and returns ST_MakeEnvelope(...).
+func (p *parser) parseBboxGeom() (string, error) {
+	if err := p.expectKind(tokLParen, "'('"); err != nil {
+		return "", fmt.Errorf("BBOX: %w", err)
+	}
+	nums := make([]string, 4)
+	for i := 0; i < 4; i++ {
+		if p.peek().kind != tokNumber {
+			return "", fmt.Errorf("BBOX coordinate %d: expected number, got %q", i+1, p.peek().value)
+		}
+		nums[i] = p.next().value
+		if i < 3 {
+			if err := p.expectKind(tokComma, "','"); err != nil {
+				return "", fmt.Errorf("BBOX: %w", err)
+			}
+		}
+	}
+	if err := p.expectKind(tokRParen, "')'"); err != nil {
+		return "", fmt.Errorf("BBOX: %w", err)
+	}
+	return fmt.Sprintf("ST_MakeEnvelope(%s, %s, %s, %s)", nums[0], nums[1], nums[2], nums[3]), nil
+}
+
+// parseWKTGeom parses a WKT geometry body (e.g. POINT(1 2)) and returns ST_GeomFromText('...').
+func (p *parser) parseWKTGeom(typeName string) (string, error) {
+	if p.peek().kind != tokLParen {
+		return "", fmt.Errorf("expected '(' after %s", typeName)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(typeName)
+	depth := 0
+	prevWasNum := false
+
+	for {
+		t := p.peek()
+		if t.kind == tokEOF {
+			return "", fmt.Errorf("unexpected end of input in %s geometry", typeName)
+		}
+		p.next()
+		switch t.kind {
+		case tokLParen:
+			depth++
+			sb.WriteString("(")
+			prevWasNum = false
+		case tokRParen:
+			depth--
+			sb.WriteString(")")
+			prevWasNum = false
+			if depth == 0 {
+				wkt := sb.String()
+				escaped := strings.ReplaceAll(wkt, "'", "''")
+				return fmt.Sprintf("ST_GeomFromText('%s')", escaped), nil
+			}
+		case tokComma:
+			sb.WriteString(",")
+			prevWasNum = false
+		case tokNumber:
+			if prevWasNum {
+				sb.WriteString(" ")
+			}
+			sb.WriteString(t.value)
+			prevWasNum = true
+		default:
+			return "", fmt.Errorf("unexpected token %q in %s geometry", t.value, typeName)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Temporal predicate parsing
+// ---------------------------------------------------------------------------
+
+// parseTemporalExpr parses: T_AFTER(prop, TIMESTAMP('...')) or T_DURING(prop, INTERVAL('...','...'))
+func (p *parser) parseTemporalExpr() (Expr, error) {
+	op := strings.ToUpper(p.next().value) // consume T_AFTER etc.
+	if err := p.expectKind(tokLParen, "'('"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	propTok := p.next()
+	if propTok.kind != tokIdent && propTok.kind != tokQIdent {
+		return nil, fmt.Errorf("%s arg1: expected property name, got %q", op, propTok.value)
+	}
+	prop := propTok.value
+
+	if err := p.expectKind(tokComma, "','"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	// Second arg: TIMESTAMP or INTERVAL
+	kwTok := p.next()
+	if kwTok.kind != tokIdent {
+		return nil, fmt.Errorf("%s arg2: expected TIMESTAMP or INTERVAL, got %q", op, kwTok.value)
+	}
+
+	var e *TemporalExpr
+	switch strings.ToUpper(kwTok.value) {
+	case "TIMESTAMP":
+		ts, err := p.parseTimestampArg()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		e = &TemporalExpr{Op: op, Prop: prop, Low: ts}
+	case "INTERVAL":
+		if op != "T_DURING" {
+			return nil, fmt.Errorf("INTERVAL literal is only valid for T_DURING, not %s", op)
+		}
+		low, high, err := p.parseIntervalArgs()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		e = &TemporalExpr{Op: op, Prop: prop, Low: low, High: high}
+	default:
+		return nil, fmt.Errorf("%s arg2: expected TIMESTAMP or INTERVAL, got %q", op, kwTok.value)
+	}
+
+	if err := p.expectKind(tokRParen, "')'"); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	return e, nil
+}
+
+func (p *parser) parseTimestampArg() (string, error) {
+	if err := p.expectKind(tokLParen, "'('"); err != nil {
+		return "", fmt.Errorf("TIMESTAMP: %w", err)
+	}
+	if p.peek().kind != tokString {
+		return "", fmt.Errorf("TIMESTAMP: expected string, got %q", p.peek().value)
+	}
+	ts := p.next().value
+	if err := p.expectKind(tokRParen, "')'"); err != nil {
+		return "", fmt.Errorf("TIMESTAMP: %w", err)
+	}
+	return ts, nil
+}
+
+func (p *parser) parseIntervalArgs() (string, string, error) {
+	if err := p.expectKind(tokLParen, "'('"); err != nil {
+		return "", "", fmt.Errorf("INTERVAL: %w", err)
+	}
+	if p.peek().kind != tokString {
+		return "", "", fmt.Errorf("INTERVAL start: expected string, got %q", p.peek().value)
+	}
+	low := p.next().value
+	if err := p.expectKind(tokComma, "','"); err != nil {
+		return "", "", fmt.Errorf("INTERVAL: %w", err)
+	}
+	if p.peek().kind != tokString {
+		return "", "", fmt.Errorf("INTERVAL end: expected string, got %q", p.peek().value)
+	}
+	high := p.next().value
+	if err := p.expectKind(tokRParen, "')'"); err != nil {
+		return "", "", fmt.Errorf("INTERVAL: %w", err)
+	}
+	return low, high, nil
+}
+
+// ---------------------------------------------------------------------------
 // Translation
 // ---------------------------------------------------------------------------
 
+// TranslateContext provides collection metadata needed to generate correct SQL.
+type TranslateContext struct {
+	Queryables     map[string]config.QueryableField
+	GeomColumn     string
+	GeomIsNative   bool
+	DatetimeColumn string
+}
+
 // Translate converts a parsed CQL2 expression tree into a parameterized SQL
 // WHERE fragment and its argument list.
-func Translate(expr Expr, queryables map[string]config.QueryableField) (string, []interface{}, error) {
+func Translate(expr Expr, ctx TranslateContext) (string, []interface{}, error) {
 	var args []interface{}
-	sql, err := translateExpr(expr, queryables, &args)
+	sql, err := translateExpr(expr, ctx, &args)
 	if err != nil {
 		return "", nil, err
 	}
 	return sql, args, nil
 }
 
-func translateExpr(expr Expr, queryables map[string]config.QueryableField, args *[]interface{}) (string, error) {
+func translateExpr(expr Expr, ctx TranslateContext, args *[]interface{}) (string, error) {
 	switch e := expr.(type) {
 	case *LogicalExpr:
-		left, err := translateExpr(e.Left, queryables, args)
+		left, err := translateExpr(e.Left, ctx, args)
 		if err != nil {
 			return "", err
 		}
-		right, err := translateExpr(e.Right, queryables, args)
+		right, err := translateExpr(e.Right, ctx, args)
 		if err != nil {
 			return "", err
 		}
 		return "(" + left + " " + e.Op + " " + right + ")", nil
 
 	case *NotExpr:
-		inner, err := translateExpr(e.Expr, queryables, args)
+		inner, err := translateExpr(e.Expr, ctx, args)
 		if err != nil {
 			return "", err
 		}
 		return "NOT (" + inner + ")", nil
 
 	case *CompareExpr:
-		field, ok := queryables[e.Prop]
+		field, ok := ctx.Queryables[e.Prop]
 		if !ok {
 			return "", fmt.Errorf("unknown queryable property %q", e.Prop)
 		}
@@ -546,7 +816,7 @@ func translateExpr(expr Expr, queryables map[string]config.QueryableField, args 
 		return fmt.Sprintf(`"%s" %s ?`, e.Prop, e.Op), nil
 
 	case *LikeExpr:
-		if _, ok := queryables[e.Prop]; !ok {
+		if _, ok := ctx.Queryables[e.Prop]; !ok {
 			return "", fmt.Errorf("unknown queryable property %q", e.Prop)
 		}
 		*args = append(*args, e.Pattern)
@@ -556,7 +826,7 @@ func translateExpr(expr Expr, queryables map[string]config.QueryableField, args 
 		return fmt.Sprintf(`"%s" LIKE ?`, e.Prop), nil
 
 	case *IsNullExpr:
-		if _, ok := queryables[e.Prop]; !ok {
+		if _, ok := ctx.Queryables[e.Prop]; !ok {
 			return "", fmt.Errorf("unknown queryable property %q", e.Prop)
 		}
 		if e.Not {
@@ -565,7 +835,7 @@ func translateExpr(expr Expr, queryables map[string]config.QueryableField, args 
 		return fmt.Sprintf(`"%s" IS NULL`, e.Prop), nil
 
 	case *InExpr:
-		field, ok := queryables[e.Prop]
+		field, ok := ctx.Queryables[e.Prop]
 		if !ok {
 			return "", fmt.Errorf("unknown queryable property %q", e.Prop)
 		}
@@ -584,7 +854,7 @@ func translateExpr(expr Expr, queryables map[string]config.QueryableField, args 
 		return fmt.Sprintf(`"%s" IN (%s)`, e.Prop, strings.Join(placeholders, ",")), nil
 
 	case *BetweenExpr:
-		field, ok := queryables[e.Prop]
+		field, ok := ctx.Queryables[e.Prop]
 		if !ok {
 			return "", fmt.Errorf("unknown queryable property %q", e.Prop)
 		}
@@ -602,8 +872,62 @@ func translateExpr(expr Expr, queryables map[string]config.QueryableField, args 
 		}
 		return fmt.Sprintf(`"%s" BETWEEN ? AND ?`, e.Prop), nil
 
+	case *SpatialExpr:
+		// Build column expression, wrapping WKB blobs if necessary.
+		colExpr := fmt.Sprintf(`"%s"`, e.Prop)
+		if e.Prop == ctx.GeomColumn && !ctx.GeomIsNative {
+			colExpr = fmt.Sprintf(`ST_GeomFromWKB("%s")`, e.Prop)
+		}
+		duckFn := spatialOpToSQL(e.Op)
+		return fmt.Sprintf("%s(%s, %s)", duckFn, colExpr, e.GeomSQL), nil
+
+	case *TemporalExpr:
+		if ctx.DatetimeColumn == "" {
+			return "", fmt.Errorf("temporal predicate requires a datetime column, but collection has none")
+		}
+		col := fmt.Sprintf(`"%s"`, e.Prop)
+		switch e.Op {
+		case "T_AFTER":
+			*args = append(*args, e.Low)
+			return fmt.Sprintf(`%s > ?`, col), nil
+		case "T_BEFORE":
+			*args = append(*args, e.Low)
+			return fmt.Sprintf(`%s < ?`, col), nil
+		case "T_EQUALS":
+			*args = append(*args, e.Low)
+			return fmt.Sprintf(`%s = ?`, col), nil
+		case "T_DURING":
+			*args = append(*args, e.Low, e.High)
+			return fmt.Sprintf(`(%s >= ? AND %s <= ?)`, col, col), nil
+		default:
+			return "", fmt.Errorf("unsupported temporal op %q", e.Op)
+		}
+
 	default:
 		return "", fmt.Errorf("unsupported expression type %T", expr)
+	}
+}
+
+func spatialOpToSQL(op string) string {
+	switch op {
+	case "S_INTERSECTS":
+		return "ST_Intersects"
+	case "S_WITHIN":
+		return "ST_Within"
+	case "S_CONTAINS":
+		return "ST_Contains"
+	case "S_DISJOINT":
+		return "ST_Disjoint"
+	case "S_OVERLAPS":
+		return "ST_Overlaps"
+	case "S_TOUCHES":
+		return "ST_Touches"
+	case "S_CROSSES":
+		return "ST_Crosses"
+	case "S_EQUALS":
+		return "ST_Equals"
+	default:
+		return "ST_Intersects"
 	}
 }
 

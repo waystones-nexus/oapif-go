@@ -52,9 +52,17 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 					"schema":      map[string]any{"type": "integer", "default": 0, "minimum": 0},
 				},
 				"bbox": map[string]any{
-					"name": "bbox", "in": "query",
-					"description": "Bounding box: minx,miny,maxx,maxy (CRS84)",
-					"schema":      map[string]any{"type": "string"},
+					"name":        "bbox",
+					"in":          "query",
+					"description": "Bounding box filter: minx,miny,maxx,maxy in CRS84",
+					"explode":     false,
+					"style":       "form",
+					"schema": map[string]any{
+						"type":     "array",
+						"minItems": 4,
+						"maxItems": 6,
+						"items":    map[string]any{"type": "number"},
+					},
 				},
 				"datetime": map[string]any{
 					"name": "datetime", "in": "query",
@@ -67,8 +75,10 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 					"schema":      map[string]any{"type": "string"},
 				},
 				"filter-lang": map[string]any{
-					"name": "filter-lang", "in": "query",
-					"schema": map[string]any{"type": "string", "enum": []string{"cql2-text", "cql2-json"}, "default": "cql2-text"},
+					"name":        "filter-lang",
+					"in":          "query",
+					"description": "Filter language: cql2-text (default) or cql2-json",
+					"schema":      map[string]any{"type": "string", "enum": []string{"cql2-text", "cql2-json"}, "default": "cql2-text"},
 				},
 				"crs": map[string]any{
 					"name": "crs", "in": "query",

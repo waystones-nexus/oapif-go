@@ -70,7 +70,8 @@ func main() {
 
 	// Serve HTTP in goroutine; DuckDB init runs below in main goroutine.
 	go func() {
-		if err := http.Serve(ln, lazyInitMiddleware(cfg, s3c, mux)); err != nil {
+		handler := headMiddleware(lazyInitMiddleware(cfg, s3c, mux))
+		if err := http.Serve(ln, handler); err != nil {
 			log.Fatalf("server: %v", err)
 		}
 	}()
@@ -126,6 +127,28 @@ func main() {
 func logStartup(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[startup] %dms - %s", time.Since(startTime).Milliseconds(), msg)
+}
+
+// headMiddleware handles HTTP HEAD requests by running them as GET and discarding
+// the response body. This satisfies OGC API Features conformance requirement that
+// HEAD is supported on all GET endpoints.
+func headMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			r.Method = http.MethodGet
+			next.ServeHTTP(&headResponseWriter{ResponseWriter: w}, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type headResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (h *headResponseWriter) Write(b []byte) (int, error) {
+	return len(b), nil // discard body, keep headers
 }
 
 // lazyInitMiddleware reads X-Waystones-OapifGo-B64 on the first request when

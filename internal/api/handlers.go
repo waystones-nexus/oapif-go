@@ -246,9 +246,22 @@ func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
 	conforms := []string{
+		// OGC API Features Part 1
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+		// OGC API Features Part 3 — filtering
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
+		// CQL2 — text, JSON, basic comparisons, spatial, temporal
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
+		"http://www.opengis.net/spec/cql2/1.0/conf/advanced-comparison-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/case-insensitive-comparison",
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/spatial-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/temporal-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
 	}
 	if acceptsHTML(r) {
 		h.renderHTML(w, "conformance.html", conformanceTmplData{
@@ -439,20 +452,31 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		propArgs = append(propArgs, v)
 	}
 
-	// CQL2-Text filter
+	// CQL2 filter (text or JSON)
 	if raw := q.Get("filter"); raw != "" {
-		if q.Get("filter-lang") == "cql2-json" {
-			writeError(w, 501, "Not Implemented",
-				"https://www.rfc-editor.org/rfc/rfc9110#section-15.6.2",
-				"filter-lang=cql2-json is not supported")
+		filterLang := q.Get("filter-lang")
+		var ast cql2.Expr
+		var parseErr error
+		switch filterLang {
+		case "", "cql2-text":
+			ast, parseErr = cql2.Parse(raw)
+		case "cql2-json", "cql2+json":
+			ast, parseErr = cql2.ParseJSON([]byte(raw))
+		default:
+			InvalidParameter(w, "filter-lang", fmt.Sprintf("unsupported filter language %q; use cql2-text or cql2-json", filterLang))
 			return
 		}
-		ast, err := cql2.Parse(raw)
-		if err != nil {
-			InvalidParameter(w, "filter", err.Error())
+		if parseErr != nil {
+			InvalidParameter(w, "filter", parseErr.Error())
 			return
 		}
-		fsql, fargs, err := cql2.Translate(ast, col.Queryables)
+		tctx := cql2.TranslateContext{
+			Queryables:     col.Queryables,
+			GeomColumn:     col.GeomColumn,
+			GeomIsNative:   col.GeomIsNative,
+			DatetimeColumn: col.DatetimeColumn,
+		}
+		fsql, fargs, err := cql2.Translate(ast, tctx)
 		if err != nil {
 			InvalidParameter(w, "filter", err.Error())
 			return
