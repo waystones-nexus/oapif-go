@@ -87,8 +87,10 @@ func main() {
 	}
 
 	// Detect schema for collections that had no sidecar.
+	// needsDetection only covers collections present at startup; collections
+	// added later by lazy-init (i >= len) always need detection.
 	for i := range cfg.Collections {
-		if !needsDetection[i] {
+		if i < len(needsDetection) && !needsDetection[i] {
 			continue
 		}
 		c := &cfg.Collections[i]
