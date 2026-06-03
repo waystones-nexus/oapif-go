@@ -761,6 +761,8 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 			Bbox:         q.Get("bbox"),
 			Datetime:     q.Get("datetime"),
 			Filter:       q.Get("filter"),
+			Sortby:       strings.Join(q["sortby"], ","),
+			Properties:   q.Get("properties"),
 			PrevHref:     prevHref,
 			NextHref:     nextHref,
 		})

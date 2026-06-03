@@ -44,6 +44,8 @@ type itemsTmplData struct {
 	Bbox         string
 	Datetime     string
 	Filter       string
+	Sortby       string
+	Properties   string
 	PrevHref     string
 	NextHref     string
 }

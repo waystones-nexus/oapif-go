@@ -5,32 +5,38 @@
   <div class="breadcrumb mb-1">
     <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.Col.Title}}</a> / Items
   </div>
-  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <h2 class="mb-0">{{.Col.Title}} — Items</h2>
       <span class="text-muted small features-count">{{.Total}} features</span>
     </div>
     <div class="d-flex gap-2 align-items-center flex-wrap">
-      {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}}</span>{{end}}
+      {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}} <a class="chip-clear" href="#" onclick="clearParam('bbox');return false">✕</a></span>{{end}}
       {{if .Datetime}}<span class="brand-chip">datetime: {{.Datetime}}</span>{{end}}
-      {{if .Filter}}<span class="brand-chip">filter: {{.Filter}}</span>{{end}}
-      <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
-      <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
-      <button id="draw-bbox-btn" class="btn btn-json btn-sm" style="display:none">Draw Bbox</button>
-      <label class="d-flex align-items-center gap-1 text-muted small mb-0">
-        Limit
-        <select id="limit-sel" class="form-select form-select-sm d-inline-block" style="width:auto">
-          <option value="10" {{if eq .Limit 10}}selected{{end}}>10</option>
-          <option value="50" {{if eq .Limit 50}}selected{{end}}>50</option>
-          <option value="100" {{if eq .Limit 100}}selected{{end}}>100</option>
-          <option value="500" {{if eq .Limit 500}}selected{{end}}>500</option>
-          <option value="1000" {{if eq .Limit 1000}}selected{{end}}>1000</option>
-        </select>
-      </label>
-      <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
-      <button id="filter-toggle" class="btn btn-json btn-sm">Filter ▾</button>
-      <a href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}" class="btn btn-json">JSON</a>
+      {{if .Filter}}<span class="brand-chip">filter: {{.Filter}} <a class="chip-clear" href="#" onclick="clearParam('filter','filter-lang');return false">✕</a></span>{{end}}
+      {{if .Sortby}}<span class="brand-chip">sort: {{.Sortby}} <a class="chip-clear" href="#" onclick="clearParam('sortby');return false">✕</a></span>{{end}}
+      {{if .Properties}}<span class="brand-chip">cols: {{.Properties}} <a class="chip-clear" href="#" onclick="clearParam('properties');return false">✕</a></span>{{end}}
     </div>
+  </div>
+
+  <div class="d-flex gap-2 align-items-center flex-wrap mb-3">
+    <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
+    <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
+    <button id="draw-bbox-btn" class="btn btn-json btn-sm" style="display:none">Draw Bbox</button>
+    <label class="d-flex align-items-center gap-1 text-muted small mb-0">
+      Limit
+      <select id="limit-sel" class="form-select form-select-sm d-inline-block" style="width:auto">
+        <option value="10" {{if eq .Limit 10}}selected{{end}}>10</option>
+        <option value="50" {{if eq .Limit 50}}selected{{end}}>50</option>
+        <option value="100" {{if eq .Limit 100}}selected{{end}}>100</option>
+        <option value="500" {{if eq .Limit 500}}selected{{end}}>500</option>
+        <option value="1000" {{if eq .Limit 1000}}selected{{end}}>1000</option>
+      </select>
+    </label>
+    <a href="/collections/{{.ColID}}/queryables" class="btn btn-json btn-sm">Schema</a>
+    <button id="filter-toggle" class="btn btn-json btn-sm{{if .Filter}} btn-active{{end}}">Filter ▾</button>
+    <button id="cols-toggle" class="btn btn-json btn-sm{{if .Properties}} btn-active{{end}}">Columns ▾</button>
+    <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json">JSON</a>
   </div>
 
   <div id="filter-panel" class="card mb-3" style="display:none">
@@ -38,9 +44,22 @@
       <div class="text-muted small mb-2" style="font-weight:600">Filter by property <span id="queryables-status" class="ms-1 fw-normal"></span></div>
       <div id="filter-rows" class="d-flex flex-column gap-2 mb-3"></div>
       <div class="d-flex gap-2 flex-wrap">
-        <button onclick="addFilterRow()" class="btn btn-json btn-sm">+ Add filter</button>
+        <button onclick="addFilterRow()" class="btn btn-json btn-sm">+ Add condition</button>
         <button onclick="applyFilters()" class="btn btn-primary btn-sm">Apply</button>
-        <button onclick="clearFilters()" class="btn btn-json btn-sm">Clear all</button>
+        <button onclick="clearFilters()" class="btn btn-json btn-sm">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cols-panel" class="card mb-3" style="display:none">
+    <div class="card-body" style="padding:1rem 1.25rem">
+      <div class="text-muted small mb-2" style="font-weight:600">Select columns to display</div>
+      <div id="cols-checkboxes" class="d-flex flex-wrap gap-2 mb-3" style="max-height:180px;overflow-y:auto"></div>
+      <div class="d-flex gap-2 flex-wrap">
+        <button onclick="applyColumns()" class="btn btn-primary btn-sm">Apply</button>
+        <button onclick="selectAllCols(true)" class="btn btn-json btn-sm">All</button>
+        <button onclick="selectAllCols(false)" class="btn btn-json btn-sm">None</button>
+        <button onclick="resetColumns()" class="btn btn-json btn-sm">Reset</button>
       </div>
     </div>
   </div>
@@ -87,6 +106,17 @@
 <style>
 #tbody tr.row-selected td { background: var(--brand-light) !important; box-shadow: inset 3px 0 0 var(--brand); }
 #tbody tr[data-idx] { cursor: pointer; }
+.sort-header { cursor: pointer; user-select: none; white-space: nowrap; }
+.sort-header:hover { color: var(--brand); }
+.sort-header .sort-arrow { margin-left: 3px; font-size: 0.75em; opacity: 0.35; }
+.sort-header.sort-active { color: var(--brand); }
+.sort-header.sort-active .sort-arrow { opacity: 1; }
+.chip-clear { color: inherit; margin-left: 4px; opacity: 0.6; text-decoration: none; }
+.chip-clear:hover { opacity: 1; }
+.btn-active { background: var(--brand-light); border-color: var(--brand); color: var(--brand); }
+.col-checkbox-label { display:flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--brand-border);border-radius:6px;cursor:pointer;font-size:0.82rem;white-space:nowrap; }
+.col-checkbox-label:hover { background: var(--brand-light); }
+.col-checkbox-label input { accent-color: var(--brand); }
 </style>
 <script>
 var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
@@ -94,8 +124,42 @@ var features = {{.FeaturesJSON}};
 if (!features) features = [];
 var colID = '{{.ColID}}';
 var hoveredId = null, featureBounds = null;
-
 var selectedId = null;
+
+// ── Sort state ────────────────────────────────────────────────────────────────
+var sortState = (function() {
+  var s = new URL(window.location.href).searchParams.get('sortby') || '';
+  var st = {};
+  s.split(',').forEach(function(part) {
+    part = part.trim();
+    if (!part) return;
+    if (part[0] === '-') st[part.slice(1)] = 'desc';
+    else st[part[0] === '+' ? part.slice(1) : part] = 'asc';
+  });
+  return st;
+})();
+
+function toggleSort(col) {
+  var cur = sortState[col];
+  var url = new URL(window.location.href);
+  var val;
+  if (!cur)         val = col;         // ascending
+  else if (cur==='asc') val = '-'+col; // descending
+  else              val = null;        // remove
+  if (val) url.searchParams.set('sortby', val);
+  else     url.searchParams.delete('sortby');
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
+// ── Param clear helpers ───────────────────────────────────────────────────────
+function clearParam() {
+  var url = new URL(window.location.href);
+  for (var i = 0; i < arguments.length; i++) url.searchParams.delete(arguments[i]);
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
 function setSelectedFeature(idx) {
   if (selectedId !== null) {
     try { map.setFeatureState({source:'features',id:selectedId},{selected:false}); } catch(e) {}
@@ -104,14 +168,11 @@ function setSelectedFeature(idx) {
   if (idx !== null) {
     try { map.setFeatureState({source:'features',id:idx},{selected:true}); } catch(e) {}
   }
-  // Table row highlight
   var prev = document.querySelector('#tbody tr.row-selected');
   if (prev) prev.classList.remove('row-selected');
   if (idx !== null) {
     var row = document.querySelector('#tbody tr[data-idx="'+idx+'"]');
-    if (row) {
-      row.classList.add('row-selected');
-    }
+    if (row) row.classList.add('row-selected');
   }
 }
 
@@ -166,7 +227,15 @@ function renderTable(feats) {
     return;
   }
   var props=Object.keys(feats[0].properties||{}).filter(function(p){return!p.match(/^bbox_/i);});
-  document.getElementById('thead-row').innerHTML='<th>ID</th>'+props.map(function(p){return'<th>'+p+'</th>';}).join('');
+  // Build headers with sort controls
+  var headCells = props.map(function(p) {
+    var dir = sortState[p];
+    var arrow = dir === 'asc' ? '↑' : dir === 'desc' ? '↓' : '↕';
+    var cls = 'sort-header' + (dir ? ' sort-active' : '');
+    var safeProp = p.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return '<th class="'+cls+'" onclick="toggleSort(\''+safeProp+'\')">'+p+'<span class="sort-arrow">'+arrow+'</span></th>';
+  });
+  document.getElementById('thead-row').innerHTML='<th>ID</th>'+headCells.join('');
   setTimeout(syncScrollerWidth, 0);
   document.getElementById('tbody').innerHTML=feats.map(function(f,i){
     var cells=props.map(function(p){var v=f.properties[p];return'<td>'+(v===null||v===undefined?'':v)+'</td>';}).join('');
@@ -182,7 +251,7 @@ function renderTable(feats) {
   }).join('');
 }
 
-// ── Pagination button update ───────────────────────────────────────────────────
+// ── Pagination ────────────────────────────────────────────────────────────────
 function setPaginationBtn(id, href) {
   var el=document.getElementById(id);
   if(!el)return;
@@ -194,7 +263,7 @@ function updatePagination(prevHref, nextHref) {
   setPaginationBtn('next-btn-top',nextHref); setPaginationBtn('next-btn-bot',nextHref);
 }
 
-// ── Client-side page load (no map reinit) ──────────────────────────────────────
+// ── Client-side page load ──────────────────────────────────────────────────────
 function loadPage(newFeatures, newTotal, newPrevHref, newNextHref, newUrl) {
   features = newFeatures;
   closePanel();
@@ -233,7 +302,6 @@ function goToPage(href) {
     .catch(function(){window.location.href=href;});
 }
 
-// Intercept pagination link clicks
 document.addEventListener('click',function(e){
   var a=e.target.closest('#prev-btn-top,#next-btn-top,#prev-btn-bot,#next-btn-bot');
   if(!a||!a.href||a.href==='#')return;
@@ -241,13 +309,9 @@ document.addEventListener('click',function(e){
   goToPage(a.href);
 });
 
-// ── Map setup (layers added once; sources updated on each page) ────────────────
+// ── Map setup ─────────────────────────────────────────────────────────────────
 map.on('load', function() {
   map.addSource('features',{type:'geojson',data:toFC(features)});
-
-  // fill layers DO render lines as closed shapes (connecting endpoints), so
-  // keep the polygon filter on fill only. Line layers natively skip Point features,
-  // so no filter needed there. Circle keeps a Point filter to avoid circles on all features.
   map.addLayer({id:'feat-fill',type:'fill',source:'features',
     filter:['in','$type','Polygon'],
     paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.65,['boolean',['feature-state','hover'],false],0.45,0.2]}});
@@ -292,16 +356,16 @@ map.on('load', function() {
   });
 });
 
-// ── Table row click → select feature ─────────────────────────────────────────
+// ── Table row click ───────────────────────────────────────────────────────────
 document.getElementById('tbody').addEventListener('click', function(e) {
-  if (e.target.tagName === 'A') return; // let ID links navigate normally
+  if (e.target.tagName === 'A') return;
   var row = e.target.closest('tr[data-idx]');
   if (!row) return;
   var f = features[parseInt(row.dataset.idx, 10)];
   if (f) showPanel(f);
 });
 
-// ── Top scrollbar sync ────────────────────────────────────────────────────────
+// ── Scrollbar sync ────────────────────────────────────────────────────────────
 var topScroll = document.getElementById('table-scroll-top');
 var mainScroll = document.getElementById('table-scroll-main');
 var scrollSizer = document.getElementById('table-scroll-sizer');
@@ -312,8 +376,6 @@ function syncScrollerWidth() {
 topScroll.addEventListener('scroll', function() { mainScroll.scrollLeft = topScroll.scrollLeft; });
 mainScroll.addEventListener('scroll', function() { topScroll.scrollLeft = mainScroll.scrollLeft; });
 new ResizeObserver(syncScrollerWidth).observe(document.getElementById('features-table') || document.body);
-
-// Initial table render
 renderTable(features);
 
 // ── Feature panel ─────────────────────────────────────────────────────────────
@@ -340,7 +402,7 @@ function showPanel(f) {
 }
 function closePanel() { document.getElementById('feat-panel').style.display = 'none'; setSelectedFeature(null); }
 
-// ── Use View button ────────────────────────────────────────────────────────────
+// ── Use View ──────────────────────────────────────────────────────────────────
 document.getElementById('use-view-btn').onclick = function() {
   var b = map.getBounds();
   var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(function(v){ return v.toFixed(6); }).join(',');
@@ -349,7 +411,7 @@ document.getElementById('use-view-btn').onclick = function() {
   window.location.href = url.toString();
 };
 
-// ── Fit to features ────────────────────────────────────────────────────────────
+// ── Fit to features ───────────────────────────────────────────────────────────
 document.getElementById('fit-btn').onclick = function() {
   if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
 };
@@ -361,54 +423,46 @@ drawRectEl.style.cssText = 'position:absolute;border:2px solid #4338ca;backgroun
 document.getElementById('map').appendChild(drawRectEl);
 
 document.getElementById('draw-bbox-btn').onclick = function() {
-  if (drawMode) {
-    exitDrawMode();
-  } else {
+  if (drawMode) { exitDrawMode(); }
+  else {
     drawMode = true;
     map.getCanvas().style.cursor = 'crosshair';
     map.dragPan.disable();
-    this.textContent = 'Cancel';
-    this.style.background = 'var(--brand-border)';
+    this.textContent = 'Cancel'; this.style.background = 'var(--brand-border)';
   }
 };
 function exitDrawMode() {
   drawMode = false; drawStart = null;
-  map.getCanvas().style.cursor = '';
-  map.dragPan.enable();
-  drawRectEl.style.display = 'none';
+  map.getCanvas().style.cursor = ''; map.dragPan.enable(); drawRectEl.style.display = 'none';
   var btn = document.getElementById('draw-bbox-btn');
   btn.textContent = 'Draw Bbox'; btn.style.background = '';
 }
 var canvas = map.getCanvas();
 canvas.addEventListener('mousedown', function(e) {
-  if (!drawMode) return;
-  e.preventDefault();
+  if (!drawMode) return; e.preventDefault();
   drawStart = {x: e.offsetX, y: e.offsetY, ll: map.unproject([e.offsetX, e.offsetY])};
   drawRectEl.style.cssText = 'position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;z-index:5';
-  drawRectEl.style.left = e.offsetX + 'px'; drawRectEl.style.top = e.offsetY + 'px';
+  drawRectEl.style.left = e.offsetX+'px'; drawRectEl.style.top = e.offsetY+'px';
   drawRectEl.style.width = '0'; drawRectEl.style.height = '0';
 });
 canvas.addEventListener('mousemove', function(e) {
   if (!drawMode || !drawStart) return;
-  var x = Math.min(drawStart.x, e.offsetX), y = Math.min(drawStart.y, e.offsetY);
-  drawRectEl.style.left = x+'px'; drawRectEl.style.top = y+'px';
-  drawRectEl.style.width = Math.abs(e.offsetX - drawStart.x)+'px';
-  drawRectEl.style.height = Math.abs(e.offsetY - drawStart.y)+'px';
+  var x=Math.min(drawStart.x,e.offsetX), y=Math.min(drawStart.y,e.offsetY);
+  drawRectEl.style.left=x+'px'; drawRectEl.style.top=y+'px';
+  drawRectEl.style.width=Math.abs(e.offsetX-drawStart.x)+'px'; drawRectEl.style.height=Math.abs(e.offsetY-drawStart.y)+'px';
 });
 canvas.addEventListener('mouseup', function(e) {
   if (!drawMode || !drawStart) return;
   var endLL = map.unproject([e.offsetX, e.offsetY]);
-  var bbox = [
-    Math.min(drawStart.ll.lng, endLL.lng), Math.min(drawStart.ll.lat, endLL.lat),
-    Math.max(drawStart.ll.lng, endLL.lng), Math.max(drawStart.ll.lat, endLL.lat)
-  ].map(function(v){ return v.toFixed(6); }).join(',');
+  var bbox = [Math.min(drawStart.ll.lng,endLL.lng),Math.min(drawStart.ll.lat,endLL.lat),
+    Math.max(drawStart.ll.lng,endLL.lng),Math.max(drawStart.ll.lat,endLL.lat)].map(function(v){return v.toFixed(6);}).join(',');
   exitDrawMode();
   var url = new URL(window.location.href);
   url.searchParams.set('bbox', bbox); url.searchParams.delete('offset');
   window.location.href = url.toString();
 });
 
-// ── Limit selector ────────────────────────────────────────────────────────────
+// ── Limit ─────────────────────────────────────────────────────────────────────
 document.getElementById('limit-sel').onchange = function() {
   var url = new URL(window.location.href);
   url.searchParams.set('limit', this.value); url.searchParams.delete('offset');
@@ -430,9 +484,8 @@ filterToggle.onclick = function() {
   if (panelOpen && Object.keys(queryables).length === 0) loadQueryables();
 };
 
-function loadQueryables() {
+function loadQueryables(cb) {
   document.getElementById('queryables-status').textContent = '(loading…)';
-  // Use relative URL to avoid cross-origin issues with misconfigured SERVER_URL
   fetch('/collections/' + colID + '/queryables')
     .then(function(r){ return r.json(); })
     .then(function(data) {
@@ -448,6 +501,7 @@ function loadQueryables() {
           var cur = sel.value; populatePropSelect(sel); sel.value = cur;
         });
       }
+      if (cb) cb();
     })
     .catch(function(){ document.getElementById('queryables-status').textContent = '(unavailable)'; });
 }
@@ -506,7 +560,6 @@ function applyFilters() {
   url.searchParams.delete('offset');
   window.location.href = url.toString();
 }
-
 function clearFilters() {
   var url = new URL(window.location.href);
   url.searchParams.delete('filter'); url.searchParams.delete('filter-lang'); url.searchParams.delete('offset');
@@ -526,6 +579,61 @@ function clearFilters() {
     pendingRows = rows; loadQueryables();
   }
 })();
+
+// ── Columns panel ─────────────────────────────────────────────────────────────
+var colsPanel = document.getElementById('cols-panel');
+var colsToggle = document.getElementById('cols-toggle');
+var colsPanelOpen = false;
+var allColNames = []; // populated when panel opens
+
+colsToggle.onclick = function() {
+  colsPanelOpen = !colsPanelOpen;
+  colsPanel.style.display = colsPanelOpen ? '' : 'none';
+  colsToggle.textContent = colsPanelOpen ? 'Columns ▴' : 'Columns ▾';
+  if (colsPanelOpen && allColNames.length === 0) {
+    // Derive column list: from features if available, otherwise load queryables
+    if (features.length > 0) {
+      allColNames = Object.keys(features[0].properties || {}).filter(function(p){return !p.match(/^bbox_/i);});
+      renderColsPanel();
+    } else {
+      // No features on this page — load from queryables
+      if (Object.keys(queryables).length > 0) {
+        allColNames = Object.keys(queryables);
+        renderColsPanel();
+      } else {
+        loadQueryables(function() { allColNames = Object.keys(queryables); renderColsPanel(); });
+      }
+    }
+  }
+};
+
+function renderColsPanel() {
+  var currentCols = new URL(window.location.href).searchParams.get('properties') || '';
+  var selected = currentCols ? currentCols.split(',').reduce(function(acc,s){acc[s.trim()]=true;return acc;},{}) : null;
+  var html = allColNames.map(function(p) {
+    var checked = selected ? !!selected[p] : true; // all checked when no ?properties param
+    return '<label class="col-checkbox-label"><input type="checkbox" value="'+p+'"'+(checked?' checked':'')+'>'+p+'</label>';
+  }).join('');
+  document.getElementById('cols-checkboxes').innerHTML = html || '<span class="text-muted small">No properties available</span>';
+}
+
+function applyColumns() {
+  var checked = Array.from(document.querySelectorAll('#cols-checkboxes input:checked')).map(function(i){return i.value;});
+  var url = new URL(window.location.href);
+  if (checked.length > 0 && checked.length < allColNames.length) {
+    url.searchParams.set('properties', checked.join(','));
+  } else {
+    url.searchParams.delete('properties'); // no filter needed when all selected
+  }
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
+function selectAllCols(checked) {
+  Array.from(document.querySelectorAll('#cols-checkboxes input')).forEach(function(i){i.checked = checked;});
+}
+
+function resetColumns() { clearParam('properties'); }
 </script>
 </body>
 </html>
