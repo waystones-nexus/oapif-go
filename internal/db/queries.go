@@ -24,15 +24,23 @@ type FilterExpr struct {
 	Args []interface{}
 }
 
+// SortField describes one column in an ORDER BY clause.
+type SortField struct {
+	Column string
+	Desc   bool
+}
+
 // QueryOptions bundles all query parameters for QueryItems.
 type QueryOptions struct {
-	Limit     int
-	Offset    int
-	Bbox      *[4]float64
-	BboxCRS   string        // EPSG code e.g. "EPSG:3857"; "" = CRS84 (no transform)
-	Datetime  *DatetimeFilter
-	Filter    *FilterExpr   // parameterized WHERE fragment; nil = no filter
-	OutputCRS string        // EPSG code for output geometry; "" = CRS84 (no transform)
+	Limit      int
+	Offset     int
+	Bbox       *[4]float64
+	BboxCRS    string          // EPSG code e.g. "EPSG:3857"; "" = CRS84 (no transform)
+	Datetime   *DatetimeFilter
+	Filter     *FilterExpr     // parameterized WHERE fragment; nil = no filter
+	OutputCRS  string          // EPSG code for output geometry; "" = CRS84 (no transform)
+	SortBy     []SortField     // nil → default ORDER BY id ASC
+	Properties []string        // nil → all non-system columns
 }
 
 // DetectColumns reads the parquet schema and GeoParquet `geo` metadata to determine:
@@ -524,15 +532,43 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		excludeCols = append(excludeCols, "bbox")
 	}
 
+	// Property selection: explicit list or wildcard-minus-system-cols.
+	var propClause string
+	if len(opts.Properties) > 0 {
+		quoted := make([]string, len(opts.Properties))
+		for i, p := range opts.Properties {
+			quoted[i] = fmt.Sprintf(`"%s"`, p)
+		}
+		propClause = strings.Join(quoted, ", ")
+	} else {
+		propClause = fmt.Sprintf("* EXCLUDE (%s)", strings.Join(excludeCols, ", "))
+	}
+
+	// ORDER BY: explicit sortby or default to id ASC for deterministic pagination.
+	var orderBy string
+	if len(opts.SortBy) > 0 {
+		parts := make([]string, len(opts.SortBy))
+		for i, sf := range opts.SortBy {
+			dir := "ASC"
+			if sf.Desc {
+				dir = "DESC"
+			}
+			parts[i] = fmt.Sprintf(`"%s" %s`, sf.Column, dir)
+		}
+		orderBy = " ORDER BY " + strings.Join(parts, ", ")
+	} else {
+		orderBy = fmt.Sprintf(` ORDER BY "%s" ASC`, col.IDColumn)
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
 			%s AS geometry,
-			* EXCLUDE (%s)
+			%s
 		FROM read_parquet('%s')
-		%s
+		%s%s
 		LIMIT %d OFFSET %d
-	`, col.IDColumn, geomOutputExpr(col, opts.OutputCRS), strings.Join(excludeCols, ", "), purl, where, opts.Limit, opts.Offset)
+	`, col.IDColumn, geomOutputExpr(col, opts.OutputCRS), propClause, purl, where, orderBy, opts.Limit, opts.Offset)
 
 	rows, err := s.db.QueryContext(ctx, query, whereArgs...)
 	if err != nil {
@@ -602,17 +638,30 @@ func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConf
 // QueryItem fetches a single feature by its ID column value.
 // Returns (nil, nil) when the feature is not found.
 // outputCRS is an EPSG code string (e.g. "EPSG:3857") for geometry reprojection; "" = no transform.
-func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID string, outputCRS string) (*Feature, error) {
+// properties is an optional list of property names to include; nil returns all non-system columns.
+func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID, outputCRS string, properties []string) (*Feature, error) {
 	purl := parquetURL(bucket, col.ParquetKey)
+
+	var propClause string
+	if len(properties) > 0 {
+		quoted := make([]string, len(properties))
+		for i, p := range properties {
+			quoted[i] = fmt.Sprintf(`"%s"`, p)
+		}
+		propClause = strings.Join(quoted, ", ")
+	} else {
+		propClause = fmt.Sprintf("* EXCLUDE (%s, %s)", col.GeomColumn, col.IDColumn)
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			%s AS feature_id,
 			%s AS geometry,
-			* EXCLUDE (%s, %s)
+			%s
 		FROM read_parquet('%s')
 		WHERE CAST(%s AS VARCHAR) = '%s'
 		LIMIT 1
-	`, col.IDColumn, geomOutputExpr(col, outputCRS), col.GeomColumn, col.IDColumn, purl, col.IDColumn, featureID)
+	`, col.IDColumn, geomOutputExpr(col, outputCRS), propClause, purl, col.IDColumn, featureID)
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {

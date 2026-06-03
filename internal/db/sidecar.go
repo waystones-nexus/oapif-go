@@ -45,6 +45,7 @@ func TryLoadSidecar(ctx context.Context, s3c *s3.Client, bucket, parquetKey stri
 func ApplySidecar(col *config.CollectionConfig, sc *config.MetaSidecar) {
 	col.Extent = [4]float64{sc.Extent.MinX, sc.Extent.MinY, sc.Extent.MaxX, sc.Extent.MaxY}
 	col.FeatureCount = sc.FeatureCount
+	col.GeneratedAt = sc.GeneratedAt
 	col.GeomColumn = sc.GeomColumn
 	col.IDColumn = sc.IDColumn
 	col.GeomIsNative = sc.GeomIsNative

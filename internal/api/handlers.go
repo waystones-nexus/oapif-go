@@ -34,7 +34,133 @@ type colMapEntry struct {
 var reservedParams = map[string]bool{
 	"limit": true, "offset": true, "bbox": true, "bbox-crs": true,
 	"datetime": true, "filter": true, "filter-lang": true, "crs": true, "f": true,
+	"sortby": true, "properties": true,
 }
+
+// ---------------------------------------------------------------------------
+// Cache helpers
+// ---------------------------------------------------------------------------
+
+func staticETag(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(`"%d"`, t.Unix())
+}
+
+// setStaticCacheHeaders sets ETag, Last-Modified, and Cache-Control for
+// endpoints whose content changes only when a new sidecar is written.
+func setStaticCacheHeaders(w http.ResponseWriter, t time.Time) {
+	if !t.IsZero() {
+		w.Header().Set("Last-Modified", t.UTC().Format(http.TimeFormat))
+		w.Header().Set("ETag", staticETag(t))
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+}
+
+// setItemsCacheHeaders sets Last-Modified and a shorter max-age for items endpoints.
+func setItemsCacheHeaders(w http.ResponseWriter, t time.Time) {
+	if !t.IsZero() {
+		w.Header().Set("Last-Modified", t.UTC().Format(http.TimeFormat))
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+}
+
+// checkNotModified handles If-None-Match and If-Modified-Since conditional
+// requests. Returns true and writes 304 when the content has not changed.
+func checkNotModified(w http.ResponseWriter, r *http.Request, etag string, lastModified time.Time) bool {
+	if etag != "" {
+		if match := r.Header.Get("If-None-Match"); match != "" {
+			if match == etag || match == "*" {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+	if !lastModified.IsZero() {
+		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
+			if t, err := http.ParseTime(ims); err == nil && !lastModified.After(t) {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// latestGeneratedAt returns the most recent sidecar timestamp across all collections.
+func (h *Handler) latestGeneratedAt() time.Time {
+	var latest time.Time
+	for _, col := range h.cfg.Collections {
+		if col.GeneratedAt.After(latest) {
+			latest = col.GeneratedAt
+		}
+	}
+	return latest
+}
+
+// ---------------------------------------------------------------------------
+// Query parameter helpers
+// ---------------------------------------------------------------------------
+
+// parseSortBy parses one or more sortby parameter values (comma-separated or
+// repeated). Each field may be prefixed with + (asc) or - (desc).
+func parseSortBy(params []string, queryables map[string]config.QueryableField, geomCol string) ([]db.SortField, error) {
+	var fields []db.SortField
+	for _, p := range params {
+		for _, part := range strings.Split(p, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			desc := false
+			col := part
+			switch {
+			case strings.HasPrefix(part, "-"):
+				desc = true
+				col = part[1:]
+			case strings.HasPrefix(part, "+"):
+				col = part[1:]
+			}
+			col = strings.TrimSpace(col)
+			if col == "" {
+				return nil, fmt.Errorf("empty column name")
+			}
+			if col == geomCol {
+				return nil, fmt.Errorf("cannot sort by geometry column %q", col)
+			}
+			if _, ok := queryables[col]; !ok {
+				return nil, fmt.Errorf("unknown property %q", col)
+			}
+			fields = append(fields, db.SortField{Column: col, Desc: desc})
+		}
+	}
+	return fields, nil
+}
+
+// parseProperties validates a comma-separated properties parameter against
+// the collection's queryables. Returns nil when the parameter is absent.
+func parseProperties(raw string, queryables map[string]config.QueryableField) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var props []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := queryables[p]; !ok {
+			return nil, fmt.Errorf("unknown property %q", p)
+		}
+		props = append(props, p)
+	}
+	return props, nil
+}
+
+// ---------------------------------------------------------------------------
+// CRS helpers
+// ---------------------------------------------------------------------------
 
 // effectiveCRS returns the CRS URIs this collection advertises.
 // Always includes CRS84 and EPSG:4326; adds collection.SupportedCRS.
@@ -217,7 +343,23 @@ func (h *Handler) renderHTML(w http.ResponseWriter, name string, data any) {
 	}
 }
 
+// Health reports database readiness for container orchestration.
+// Non-blocking: responds immediately without waiting for DuckDB.
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	select {
+	case <-h.dbReady:
+		h.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": "ready"})
+	default:
+		h.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "starting", "db": "initializing"})
+	}
+}
+
 func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
+	t := h.latestGeneratedAt()
+	setStaticCacheHeaders(w, t)
+	if checkNotModified(w, r, staticETag(t), t) {
+		return
+	}
 	base := h.cfg.ServerURL
 	if acceptsHTML(r) {
 		h.renderHTML(w, "index.html", indexTmplData{
@@ -245,6 +387,11 @@ func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
+	t := h.latestGeneratedAt()
+	setStaticCacheHeaders(w, t)
+	if checkNotModified(w, r, staticETag(t), t) {
+		return
+	}
 	conforms := []string{
 		// OGC API Features Part 1
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
@@ -273,6 +420,11 @@ func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
+	t := h.latestGeneratedAt()
+	setStaticCacheHeaders(w, t)
+	if checkNotModified(w, r, staticETag(t), t) {
+		return
+	}
 	base := h.cfg.ServerURL
 	infos := make([]CollectionInfo, 0, len(h.cfg.Collections))
 	for i := range h.cfg.Collections {
@@ -337,6 +489,10 @@ func (h *Handler) Collection(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
 		return
 	}
+	setStaticCacheHeaders(w, col.GeneratedAt)
+	if checkNotModified(w, r, staticETag(col.GeneratedAt), col.GeneratedAt) {
+		return
+	}
 	info := buildCollectionInfo(col, h.cfg.ServerURL)
 	if acceptsHTML(r) {
 		var bboxJS template.JS
@@ -355,6 +511,10 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
 		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))
+		return
+	}
+	setStaticCacheHeaders(w, col.GeneratedAt)
+	if checkNotModified(w, r, staticETag(col.GeneratedAt), col.GeneratedAt) {
 		return
 	}
 
@@ -510,9 +670,30 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		bboxCRS = crsURItoEPSG(bboxCRSURI)
 	}
 
+	// sortby parameter
+	sortFields, err := parseSortBy(q["sortby"], col.Queryables, col.GeomColumn)
+	if err != nil {
+		InvalidParameter(w, "sortby", err.Error())
+		return
+	}
+
+	// properties parameter
+	properties, err := parseProperties(q.Get("properties"), col.Queryables)
+	if err != nil {
+		InvalidParameter(w, "properties", err.Error())
+		return
+	}
+
+	// Cache headers — set before writing body so they appear on 304 too.
+	setItemsCacheHeaders(w, col.GeneratedAt)
+	if checkNotModified(w, r, "", col.GeneratedAt) {
+		return
+	}
+
 	opts := db.QueryOptions{
 		Limit: limit, Offset: offset, Bbox: bbox, BboxCRS: bboxCRS,
 		Datetime: dt, Filter: filter, OutputCRS: outputCRS,
+		SortBy: sortFields, Properties: properties,
 	}
 	features, total, err := h.store.QueryItems(r.Context(), col, h.cfg.S3Bucket, opts)
 	if err != nil {
@@ -626,7 +807,19 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 		activeCRSURI = crsURI
 	}
 
-	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID, outputCRS)
+	// properties parameter
+	properties, err := parseProperties(q.Get("properties"), col.Queryables)
+	if err != nil {
+		InvalidParameter(w, "properties", err.Error())
+		return
+	}
+
+	setItemsCacheHeaders(w, col.GeneratedAt)
+	if checkNotModified(w, r, "", col.GeneratedAt) {
+		return
+	}
+
+	f, err := h.store.QueryItem(r.Context(), col, h.cfg.S3Bucket, featureID, outputCRS, properties)
 	if err != nil {
 		log.Printf("item query error: %v", err)
 		InternalServerError(w, "query failed")

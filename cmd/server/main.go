@@ -49,16 +49,35 @@ func main() {
 	// Create dbReady channel and handler before binding the port.
 	dbReady := make(chan struct{})
 	h := api.NewHandler(cfg, dbReady, startTime)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", h.LandingPage)
-	mux.HandleFunc("GET /conformance", h.Conformance)
-	mux.HandleFunc("GET /collections", h.Collections)
-	mux.HandleFunc("GET /collections/{collectionId}", h.Collection)
-	mux.HandleFunc("GET /collections/{collectionId}/queryables", h.Queryables)
-	mux.HandleFunc("GET /collections/{collectionId}/items", h.Items)
-	mux.HandleFunc("GET /collections/{collectionId}/items/{featureId}", h.Item)
-	mux.HandleFunc("GET /api", h.OpenAPI)
-	mux.HandleFunc("GET /api.html", h.OpenAPIHTML)
+
+	// OGC API routes go through the full middleware chain (gzip, f-param).
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("GET /{$}", h.LandingPage)
+	apiMux.HandleFunc("GET /conformance", h.Conformance)
+	apiMux.HandleFunc("GET /collections", h.Collections)
+	apiMux.HandleFunc("GET /collections/{collectionId}", h.Collection)
+	apiMux.HandleFunc("GET /collections/{collectionId}/queryables", h.Queryables)
+	apiMux.HandleFunc("GET /collections/{collectionId}/items", h.Items)
+	apiMux.HandleFunc("GET /collections/{collectionId}/items/{featureId}", h.Item)
+	apiMux.HandleFunc("GET /api", h.OpenAPI)
+	apiMux.HandleFunc("GET /api.html", h.OpenAPIHTML)
+
+	// outerMux: /health bypasses gzip (tiny response); everything else goes
+	// through gzip → f-param → lazy-init → apiMux.
+	outerMux := http.NewServeMux()
+	outerMux.HandleFunc("GET /health", h.Health)
+	outerMux.Handle("/",
+		api.GzipMiddleware(
+			api.FParamMiddleware(
+				lazyInitMiddleware(cfg, s3c, apiMux),
+			),
+		),
+	)
+
+	// Outermost layer: CORS (all requests) → HEAD support → outerMux.
+	handler := api.CORSMiddleware(cfg.CORSAllowedOrigins)(
+		api.HeadMiddleware(outerMux),
+	)
 
 	// Bind port before DuckDB starts so health checks succeed immediately.
 	addr := ":" + cfg.Port
@@ -70,7 +89,6 @@ func main() {
 
 	// Serve HTTP in goroutine; DuckDB init runs below in main goroutine.
 	go func() {
-		handler := headMiddleware(lazyInitMiddleware(cfg, s3c, mux))
 		if err := http.Serve(ln, handler); err != nil {
 			log.Fatalf("server: %v", err)
 		}
@@ -127,28 +145,6 @@ func main() {
 func logStartup(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[startup] %dms - %s", time.Since(startTime).Milliseconds(), msg)
-}
-
-// headMiddleware handles HTTP HEAD requests by running them as GET and discarding
-// the response body. This satisfies OGC API Features conformance requirement that
-// HEAD is supported on all GET endpoints.
-func headMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			r.Method = http.MethodGet
-			next.ServeHTTP(&headResponseWriter{ResponseWriter: w}, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-type headResponseWriter struct {
-	http.ResponseWriter
-}
-
-func (h *headResponseWriter) Write(b []byte) (int, error) {
-	return len(b), nil // discard body, keep headers
 }
 
 // lazyInitMiddleware reads X-Waystones-OapifGo-B64 on the first request when

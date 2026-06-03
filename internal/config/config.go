@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // normalizeOGCCRS converts short-form CRS identifiers to canonical OGC URI form.
@@ -64,6 +65,9 @@ type CollectionConfig struct {
 	// FeatureCount is the total row count loaded from the sidecar (0 = not cached).
 	// Used by QueryItems to skip the COUNT(*) query on unfiltered requests.
 	FeatureCount int64
+	// GeneratedAt is the pipeline timestamp from the sidecar; zero if no sidecar loaded.
+	// Used for ETag and Last-Modified cache headers.
+	GeneratedAt time.Time
 }
 
 // BrandPalette holds the four CSS variable values derived from a single hex brand color,
@@ -115,6 +119,9 @@ type Config struct {
 	S3URLStyle  string // "path" or "vhost" — defaults based on whether endpoint is set
 
 	Collections []CollectionConfig
+
+	// CORSAllowedOrigins is the list of allowed CORS origins. ["*"] means all.
+	CORSAllowedOrigins []string
 }
 
 type jsonBranding struct {
@@ -367,6 +374,22 @@ func Load() *Config {
 				CRS:        "CRS84",
 			})
 		}
+	}
+
+	// CORS_ALLOWED_ORIGINS: comma-separated list, or "*" (default) for all origins.
+	if cors := os.Getenv("CORS_ALLOWED_ORIGINS"); cors != "" {
+		var origins []string
+		for _, o := range strings.Split(cors, ",") {
+			if s := strings.TrimSpace(o); s != "" {
+				origins = append(origins, s)
+			}
+		}
+		if len(origins) > 0 {
+			cfg.CORSAllowedOrigins = origins
+		}
+	}
+	if len(cfg.CORSAllowedOrigins) == 0 {
+		cfg.CORSAllowedOrigins = []string{"*"}
 	}
 
 	// BRAND_COLOR env var overrides any color from the JSON config.

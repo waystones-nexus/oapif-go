@@ -73,14 +73,10 @@ type queryablesTmplData struct {
 	Properties map[string]QueryablePropertySchema
 }
 
-// acceptsHTML returns true when the client prefers text/html and has not
-// explicitly requested JSON. Browsers send text/html first; API clients
-// typically send application/json or application/geo+json.
-// Passing ?f=json always forces JSON regardless of Accept header.
+// acceptsHTML returns true when the effective Accept header prefers text/html.
+// The ?f= parameter is normalised to an Accept header by FParamMiddleware
+// before this runs, so only the header needs to be checked here.
 func acceptsHTML(r *http.Request) bool {
-	if r.URL.Query().Get("f") == "json" {
-		return false
-	}
 	accept := r.Header.Get("Accept")
 	if strings.Contains(accept, "application/json") ||
 		strings.Contains(accept, "application/geo+json") {

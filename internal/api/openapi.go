@@ -80,6 +80,24 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 					"description": "Filter language: cql2-text (default) or cql2-json",
 					"schema":      map[string]any{"type": "string", "enum": []string{"cql2-text", "cql2-json"}, "default": "cql2-text"},
 				},
+				"f": map[string]any{
+					"name":        "f",
+					"in":          "query",
+					"description": "Output format: json, geojson, or html. Overrides the Accept header.",
+					"schema":      map[string]any{"type": "string", "enum": []string{"json", "geojson", "html"}},
+				},
+				"sortby": map[string]any{
+					"name":        "sortby",
+					"in":          "query",
+					"description": "Sort results: comma-separated field names, prefix + or none for ascending, - for descending",
+					"schema":      map[string]any{"type": "string"},
+				},
+				"properties": map[string]any{
+					"name":        "properties",
+					"in":          "query",
+					"description": "Comma-separated list of property names to include in the response",
+					"schema":      map[string]any{"type": "string"},
+				},
 				"crs": map[string]any{
 					"name": "crs", "in": "query",
 					"description": "Output CRS URI (OGC format)",
@@ -149,19 +167,22 @@ func buildPaths() map[string]any {
 		"/": map[string]any{
 			"get": map[string]any{
 				"summary": "Landing page", "operationId": "getLandingPage",
-				"responses": jsonResp("Landing page"),
+				"parameters": []any{ref("f")},
+				"responses":  jsonResp("Landing page"),
 			},
 		},
 		"/conformance": map[string]any{
 			"get": map[string]any{
 				"summary": "Conformance", "operationId": "getConformance",
-				"responses": jsonResp("Conformance classes"),
+				"parameters": []any{ref("f")},
+				"responses":  jsonResp("Conformance classes"),
 			},
 		},
 		"/collections": map[string]any{
 			"get": map[string]any{
 				"summary": "Collections", "operationId": "getCollections",
-				"responses": jsonResp("Collections"),
+				"parameters": []any{ref("f")},
+				"responses":  jsonResp("Collections"),
 			},
 		},
 		"/api": map[string]any{
@@ -178,28 +199,28 @@ func buildPaths() map[string]any {
 		"/collections/{collectionId}": map[string]any{
 			"get": map[string]any{
 				"summary": "Collection", "operationId": "getCollection",
-				"parameters": []any{ref("collectionId")},
+				"parameters": []any{ref("collectionId"), ref("f")},
 				"responses":  jsonResp("Collection metadata"),
 			},
 		},
 		"/collections/{collectionId}/queryables": map[string]any{
 			"get": map[string]any{
 				"summary": "Queryables", "operationId": "getQueryables",
-				"parameters": []any{ref("collectionId")},
+				"parameters": []any{ref("collectionId"), ref("f")},
 				"responses":  jsonResp("Queryable fields schema"),
 			},
 		},
 		"/collections/{collectionId}/items": map[string]any{
 			"get": map[string]any{
 				"summary": "Items", "operationId": "getItems",
-				"parameters": []any{ref("collectionId"), ref("limit"), ref("offset"), ref("bbox"), ref("datetime"), ref("filter"), ref("filter-lang"), ref("crs"), ref("bbox-crs")},
+				"parameters": []any{ref("collectionId"), ref("limit"), ref("offset"), ref("bbox"), ref("datetime"), ref("filter"), ref("filter-lang"), ref("sortby"), ref("properties"), ref("crs"), ref("bbox-crs"), ref("f")},
 				"responses":  geoResp("GeoJSON FeatureCollection"),
 			},
 		},
 		"/collections/{collectionId}/items/{featureId}": map[string]any{
 			"get": map[string]any{
 				"summary": "Item", "operationId": "getItem",
-				"parameters": []any{ref("collectionId"), ref("featureId")},
+				"parameters": []any{ref("collectionId"), ref("featureId"), ref("properties"), ref("f")},
 				"responses":  geoResp("GeoJSON Feature"),
 			},
 		},
@@ -207,6 +228,11 @@ func buildPaths() map[string]any {
 }
 
 func (h *Handler) OpenAPI(w http.ResponseWriter, r *http.Request) {
+	t := h.latestGeneratedAt()
+	setStaticCacheHeaders(w, t)
+	if checkNotModified(w, r, staticETag(t), t) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 	w.WriteHeader(http.StatusOK)
 	w.Write(h.openapiJSON) //nolint:errcheck
