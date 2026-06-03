@@ -46,6 +46,7 @@ type itemsTmplData struct {
 	Filter       string
 	Sortby       string
 	Properties   string
+	GeomColumn   string
 	PrevHref     string
 	NextHref     string
 }

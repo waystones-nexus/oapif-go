@@ -15,13 +15,54 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 		collectionIDs[i] = c.ID
 	}
 
+	conformsTo := []string{
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/html",
+		"http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
+		"http://www.opengis.net/spec/cql2/1.0/conf/advanced-comparison-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/spatial-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/temporal-operators",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
+	}
+
+	infoDesc := "OGC API Features server.\n\n" +
+		"**Conformance:** Part 1 (core, OAS30, GeoJSON, HTML) · Part 2 (CRS by Reference) · " +
+		"Part 3 (CQL2 filtering — text and JSON encoding, comparison, spatial and temporal predicates).\n\n" +
+		"**Extensions:** sortby for result ordering; properties for column selection."
+
+	var contactBlock map[string]any
+	if cfg.ServerContactEmail != "" || cfg.ServerContactName != "" {
+		contactBlock = map[string]any{}
+		if cfg.ServerContactName != "" {
+			contactBlock["name"] = cfg.ServerContactName
+		}
+		if cfg.ServerContactEmail != "" {
+			contactBlock["email"] = cfg.ServerContactEmail
+		}
+	}
+	infoBlock := map[string]any{
+		"title":       cfg.ServerTitle,
+		"description": infoDesc,
+		"version":     "1.0.0",
+	}
+	if cfg.ServerLicense != "" {
+		infoBlock["license"] = map[string]any{"name": cfg.ServerLicense}
+	}
+	if contactBlock != nil {
+		infoBlock["contact"] = contactBlock
+	}
+
 	doc := map[string]any{
-		"openapi": "3.0.0",
-		"info": map[string]any{
-			"title":       cfg.ServerTitle,
-			"description": "OGC API Features — served by oapif-go",
-			"version":     "1.0.0",
-		},
+		"openapi":      "3.0.0",
+		"info":         infoBlock,
+		"x-conformsTo": conformsTo,
 		"servers": []map[string]any{
 			{"url": cfg.ServerURL},
 		},
@@ -70,42 +111,45 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 					"schema":      map[string]any{"type": "string"},
 				},
 				"filter": map[string]any{
-					"name": "filter", "in": "query",
-					"description": "CQL2-Text filter expression",
+					"name":        "filter",
+					"in":          "query",
+					"description": "CQL2 filter expression. Supports comparison (=, <>, <, >, <=, >=), logical (AND, OR, NOT), LIKE, BETWEEN, IN, IS NULL, spatial predicates (S_INTERSECTS, S_WITHIN, S_CONTAINS, S_DISJOINT, S_OVERLAPS, S_TOUCHES, S_CROSSES, S_EQUALS) with WKT or BBOX geometry literals, and temporal predicates (T_AFTER, T_BEFORE, T_DURING, T_EQUALS).",
 					"schema":      map[string]any{"type": "string"},
 				},
 				"filter-lang": map[string]any{
 					"name":        "filter-lang",
 					"in":          "query",
-					"description": "Filter language: cql2-text (default) or cql2-json",
+					"description": "Filter encoding language. `cql2-text` (default) or `cql2-json`.",
 					"schema":      map[string]any{"type": "string", "enum": []string{"cql2-text", "cql2-json"}, "default": "cql2-text"},
 				},
 				"f": map[string]any{
 					"name":        "f",
 					"in":          "query",
-					"description": "Output format: json, geojson, or html. Overrides the Accept header.",
+					"description": "Response format. Overrides the `Accept` header. `json` and `geojson` return structured data; `html` returns a human-readable page.",
 					"schema":      map[string]any{"type": "string", "enum": []string{"json", "geojson", "html"}},
 				},
 				"sortby": map[string]any{
 					"name":        "sortby",
 					"in":          "query",
-					"description": "Sort results: comma-separated field names, prefix + or none for ascending, - for descending",
+					"description": "Sort order for returned features. Comma-separated property names; prefix with `-` for descending or `+`/no prefix for ascending. Example: `sortby=name,-area`.",
 					"schema":      map[string]any{"type": "string"},
 				},
 				"properties": map[string]any{
 					"name":        "properties",
 					"in":          "query",
-					"description": "Comma-separated list of property names to include in the response",
+					"description": "Comma-separated list of property names to include in the response. When omitted, all properties are returned. The feature ID and geometry are always included.",
 					"schema":      map[string]any{"type": "string"},
 				},
 				"crs": map[string]any{
-					"name": "crs", "in": "query",
-					"description": "Output CRS URI (OGC format)",
+					"name":        "crs",
+					"in":          "query",
+					"description": "OGC URI of the output coordinate reference system for geometry coordinates. Defaults to CRS84 (`http://www.opengis.net/def/crs/OGC/1.3/CRS84`). Only CRS values listed in the collection's `crs` array are accepted.",
 					"schema":      map[string]any{"type": "string"},
 				},
 				"bbox-crs": map[string]any{
-					"name": "bbox-crs", "in": "query",
-					"description": "CRS URI for the bbox parameter",
+					"name":        "bbox-crs",
+					"in":          "query",
+					"description": "OGC URI of the CRS used by the `bbox` parameter. Defaults to CRS84. Only values from the collection's `crs` array are accepted.",
 					"schema":      map[string]any{"type": "string"},
 				},
 			},
@@ -150,10 +194,17 @@ func buildPaths() map[string]any {
 			},
 		}
 	}
+	contentCrsHeader := map[string]any{
+		"Content-Crs": map[string]any{
+			"description": "OGC URI of the CRS used for geometry coordinates in the response, enclosed in angle brackets.",
+			"schema":      map[string]any{"type": "string"},
+		},
+	}
 	geoResp := func(desc string) map[string]any {
 		return map[string]any{
 			"200": map[string]any{
 				"description": desc,
+				"headers":     contentCrsHeader,
 				"content": map[string]any{
 					"application/geo+json": map[string]any{
 						"schema": map[string]any{"$ref": "#/components/schemas/FeatureCollection"},

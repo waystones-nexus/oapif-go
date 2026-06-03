@@ -13,7 +13,7 @@
     <div class="d-flex gap-2 align-items-center flex-wrap">
       {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}} <a class="chip-clear" href="#" onclick="clearParam('bbox');return false">✕</a></span>{{end}}
       {{if .Datetime}}<span class="brand-chip">datetime: {{.Datetime}}</span>{{end}}
-      {{if .Filter}}<span class="brand-chip">filter: {{.Filter}} <a class="chip-clear" href="#" onclick="clearParam('filter','filter-lang');return false">✕</a></span>{{end}}
+      {{if .Filter}}<span class="brand-chip chip-overflow" title="{{.Filter}}">filter: {{.Filter}} <a class="chip-clear" href="#" onclick="clearParam('filter','filter-lang');return false">✕</a></span>{{end}}
       {{if .Sortby}}<span class="brand-chip">sort: {{.Sortby}} <a class="chip-clear" href="#" onclick="clearParam('sortby');return false">✕</a></span>{{end}}
       {{if .Properties}}<span class="brand-chip">cols: {{.Properties}} <a class="chip-clear" href="#" onclick="clearParam('properties');return false">✕</a></span>{{end}}
     </div>
@@ -23,6 +23,7 @@
     <button id="fit-btn" class="btn btn-json btn-sm" style="display:none">Fit to features</button>
     <button id="use-view-btn" class="btn btn-json btn-sm" style="display:none">Use View</button>
     <button id="draw-bbox-btn" class="btn btn-json btn-sm" style="display:none">Draw Bbox</button>
+    <button id="draw-poly-btn" class="btn btn-json btn-sm" style="display:none">Draw Polygon</button>
     <label class="d-flex align-items-center gap-1 text-muted small mb-0">
       Limit
       <select id="limit-sel" class="form-select form-select-sm d-inline-block" style="width:auto">
@@ -37,6 +38,10 @@
     <button id="filter-toggle" class="btn btn-json btn-sm{{if .Filter}} btn-active{{end}}">Filter ▾</button>
     <button id="cols-toggle" class="btn btn-json btn-sm{{if .Properties}} btn-active{{end}}">Columns ▾</button>
     <a id="json-link" href="{{.BaseURL}}/collections/{{.ColID}}/items?f=json&limit={{.Limit}}&offset={{.Offset}}{{if .Bbox}}&bbox={{.Bbox}}{{end}}{{if .Datetime}}&datetime={{.Datetime}}{{end}}{{if .Filter}}&filter={{.Filter}}&filter-lang=cql2-text{{end}}{{if .Sortby}}&sortby={{.Sortby}}{{end}}{{if .Properties}}&properties={{.Properties}}{{end}}" class="btn btn-json">JSON</a>
+  </div>
+
+  <div id="poly-hint" class="alert alert-info py-2 px-3 mb-3 small" style="display:none">
+    <strong>Drawing polygon</strong> — click to add vertices · click first point or double-click to finish · <kbd>Esc</kbd> to cancel
   </div>
 
   <div id="filter-panel" class="card mb-3" style="display:none">
@@ -113,26 +118,27 @@
 .sort-header.sort-active .sort-arrow { opacity: 1; }
 .chip-clear { color: inherit; margin-left: 4px; opacity: 0.6; text-decoration: none; }
 .chip-clear:hover { opacity: 1; }
+.chip-overflow { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 0; }
 .btn-active { background: var(--brand-light); border-color: var(--brand); color: var(--brand); }
 .col-checkbox-label { display:flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--brand-border);border-radius:6px;cursor:pointer;font-size:0.82rem;white-space:nowrap; }
 .col-checkbox-label:hover { background: var(--brand-light); }
 .col-checkbox-label input { accent-color: var(--brand); }
+#draw-poly-btn.drawing { background: var(--brand-border); }
 </style>
 <script>
 var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
 var features = {{.FeaturesJSON}};
 if (!features) features = [];
 var colID = '{{.ColID}}';
-var hoveredId = null, featureBounds = null;
-var selectedId = null;
+var geomCol = '{{.GeomColumn}}';
+var hoveredId = null, featureBounds = null, selectedId = null;
 
 // ── Sort state ────────────────────────────────────────────────────────────────
 var sortState = (function() {
   var s = new URL(window.location.href).searchParams.get('sortby') || '';
   var st = {};
   s.split(',').forEach(function(part) {
-    part = part.trim();
-    if (!part) return;
+    part = part.trim(); if (!part) return;
     if (part[0] === '-') st[part.slice(1)] = 'desc';
     else st[part[0] === '+' ? part.slice(1) : part] = 'asc';
   });
@@ -140,19 +146,16 @@ var sortState = (function() {
 })();
 
 function toggleSort(col) {
-  var cur = sortState[col];
-  var url = new URL(window.location.href);
-  var val;
-  if (!cur)         val = col;         // ascending
-  else if (cur==='asc') val = '-'+col; // descending
-  else              val = null;        // remove
+  var cur = sortState[col], url = new URL(window.location.href), val;
+  if (!cur)          val = col;
+  else if (cur==='asc') val = '-'+col;
+  else               val = null;
   if (val) url.searchParams.set('sortby', val);
   else     url.searchParams.delete('sortby');
   url.searchParams.delete('offset');
   window.location.href = url.toString();
 }
 
-// ── Param clear helpers ───────────────────────────────────────────────────────
 function clearParam() {
   var url = new URL(window.location.href);
   for (var i = 0; i < arguments.length; i++) url.searchParams.delete(arguments[i]);
@@ -161,40 +164,28 @@ function clearParam() {
 }
 
 function setSelectedFeature(idx) {
-  if (selectedId !== null) {
-    try { map.setFeatureState({source:'features',id:selectedId},{selected:false}); } catch(e) {}
-  }
+  if (selectedId !== null) { try { map.setFeatureState({source:'features',id:selectedId},{selected:false}); } catch(e) {} }
   selectedId = idx;
-  if (idx !== null) {
-    try { map.setFeatureState({source:'features',id:idx},{selected:true}); } catch(e) {}
-  }
+  if (idx !== null) { try { map.setFeatureState({source:'features',id:idx},{selected:true}); } catch(e) {} }
   var prev = document.querySelector('#tbody tr.row-selected');
   if (prev) prev.classList.remove('row-selected');
-  if (idx !== null) {
-    var row = document.querySelector('#tbody tr[data-idx="'+idx+'"]');
-    if (row) row.classList.add('row-selected');
-  }
+  if (idx !== null) { var row = document.querySelector('#tbody tr[data-idx="'+idx+'"]'); if (row) row.classList.add('row-selected'); }
 }
 
-var map = new maplibregl.Map({
-  container: 'map',
-  style: 'https://tiles.openfreemap.org/styles/positron',
-  center: [0, 20], zoom: 2
-});
+// ── Map ───────────────────────────────────────────────────────────────────────
+var map = new maplibregl.Map({ container:'map', style:'https://tiles.openfreemap.org/styles/positron', center:[0,20], zoom:2 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
 
-// ── Data helpers ───────────────────────────────────────────────────────────────
+// ── Data helpers ──────────────────────────────────────────────────────────────
 function computeBounds(feats) {
   var W=Infinity,S=Infinity,E=-Infinity,N=-Infinity;
   function ext(c) { if(typeof c[0]==='number'){if(c[0]<W)W=c[0];if(c[1]<S)S=c[1];if(c[0]>E)E=c[0];if(c[1]>N)N=c[1];}else{c.forEach(ext);} }
   feats.forEach(function(f){if(f.geometry&&f.geometry.coordinates)ext(f.geometry.coordinates);});
-  return isFinite(W) ? [[W,S],[E,N]] : null;
+  return isFinite(W)?[[W,S],[E,N]]:null;
 }
 function toFC(feats) {
-  return {type:'FeatureCollection', features:feats.map(function(f,i){
-    return {type:'Feature',id:i,geometry:f.geometry,properties:Object.assign({},f.properties)};
-  })};
+  return {type:'FeatureCollection',features:feats.map(function(f,i){return{type:'Feature',id:i,geometry:f.geometry,properties:Object.assign({},f.properties)};})};
 }
 function toCentroids(feats) {
   var arr=[];
@@ -207,19 +198,16 @@ function toCentroids(feats) {
     flatC(f.geometry.coordinates);
     if(!coords.length)return;
     var lngs=coords.map(function(c){return c[0];}),lats=coords.map(function(c){return c[1];});
-    arr.push({type:'Feature',id:i,geometry:{type:'Point',coordinates:[
-      (Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2,
-      (Math.min.apply(null,lats)+Math.max.apply(null,lats))/2
-    ]},properties:{}});
+    arr.push({type:'Feature',id:i,geometry:{type:'Point',coordinates:[(Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2,(Math.min.apply(null,lats)+Math.max.apply(null,lats))/2]},properties:{}});
   });
   return {type:'FeatureCollection',features:arr};
 }
 function toRelPath(href) {
   if(!href)return'';
-  try{var u=new URL(href,window.location.href);return u.pathname+(u.search||'')+'';}catch(e){return href;}
+  try{var u=new URL(href,window.location.href);return u.pathname+(u.search||'');}catch(e){return href;}
 }
 
-// ── Table render ───────────────────────────────────────────────────────────────
+// ── Table render ──────────────────────────────────────────────────────────────
 function renderTable(feats) {
   if(!feats||!feats.length){
     document.getElementById('thead-row').innerHTML='';
@@ -227,16 +215,14 @@ function renderTable(feats) {
     return;
   }
   var props=Object.keys(feats[0].properties||{}).filter(function(p){return!p.match(/^bbox_/i);});
-  // Build headers with sort controls
-  var headCells = props.map(function(p) {
-    var dir = sortState[p];
-    var arrow = dir === 'asc' ? '↑' : dir === 'desc' ? '↓' : '↕';
-    var cls = 'sort-header' + (dir ? ' sort-active' : '');
-    var safeProp = p.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    return '<th class="'+cls+'" onclick="toggleSort(\''+safeProp+'\')">'+p+'<span class="sort-arrow">'+arrow+'</span></th>';
+  var headCells=props.map(function(p){
+    var dir=sortState[p],arrow=dir==='asc'?'↑':dir==='desc'?'↓':'↕';
+    var cls='sort-header'+(dir?' sort-active':'');
+    var safe=p.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return '<th class="'+cls+'" onclick="toggleSort(\''+safe+'\')">'+p+'<span class="sort-arrow">'+arrow+'</span></th>';
   });
   document.getElementById('thead-row').innerHTML='<th>ID</th>'+headCells.join('');
-  setTimeout(syncScrollerWidth, 0);
+  setTimeout(syncScrollerWidth,0);
   document.getElementById('tbody').innerHTML=feats.map(function(f,i){
     var cells=props.map(function(p){var v=f.properties[p];return'<td>'+(v===null||v===undefined?'':v)+'</td>';}).join('');
     var id=f.id!==undefined?f.id:'';
@@ -252,388 +238,402 @@ function renderTable(feats) {
 }
 
 // ── Pagination ────────────────────────────────────────────────────────────────
-function setPaginationBtn(id, href) {
-  var el=document.getElementById(id);
-  if(!el)return;
-  el.href=href||'#';
-  el.style.display=href?'':'none';
-}
-function updatePagination(prevHref, nextHref) {
-  setPaginationBtn('prev-btn-top',prevHref); setPaginationBtn('prev-btn-bot',prevHref);
-  setPaginationBtn('next-btn-top',nextHref); setPaginationBtn('next-btn-bot',nextHref);
-}
-
-// ── Client-side page load ──────────────────────────────────────────────────────
-function loadPage(newFeatures, newTotal, newPrevHref, newNextHref, newUrl) {
-  features = newFeatures;
-  closePanel();
-  if(hoveredId!==null){
-    try{map.setFeatureState({source:'features',id:hoveredId},{hover:false});}catch(e){}
-    hoveredId=null;
-  }
-  if(map.getSource('features'))map.getSource('features').setData(toFC(newFeatures));
-  if(map.getSource('centroids'))map.getSource('centroids').setData(toCentroids(newFeatures));
-  var bounds=computeBounds(newFeatures);
-  featureBounds=bounds;
+function setPaginationBtn(id,href){var el=document.getElementById(id);if(!el)return;el.href=href||'#';el.style.display=href?'':'none';}
+function updatePagination(p,n){setPaginationBtn('prev-btn-top',p);setPaginationBtn('prev-btn-bot',p);setPaginationBtn('next-btn-top',n);setPaginationBtn('next-btn-bot',n);}
+function loadPage(newFeats,newTotal,newPrev,newNext,newUrl) {
+  features=newFeats; closePanel();
+  if(hoveredId!==null){try{map.setFeatureState({source:'features',id:hoveredId},{hover:false});}catch(e){}hoveredId=null;}
+  if(map.getSource('features'))map.getSource('features').setData(toFC(newFeats));
+  if(map.getSource('centroids'))map.getSource('centroids').setData(toCentroids(newFeats));
+  var bounds=computeBounds(newFeats); featureBounds=bounds;
   if(bounds){map.fitBounds(bounds,{padding:40,maxZoom:14});document.getElementById('fit-btn').style.display='';}
   else{document.getElementById('fit-btn').style.display='none';}
-  renderTable(newFeatures);
-  updatePagination(newPrevHref, newNextHref);
-  var countEl=document.querySelector('.features-count');
-  if(countEl)countEl.textContent=(newTotal||newFeatures.length)+' features';
+  renderTable(newFeats); updatePagination(newPrev,newNext);
+  var c=document.querySelector('.features-count'); if(c)c.textContent=(newTotal||newFeats.length)+' features';
   if(newUrl)history.pushState(null,'',newUrl);
 }
-
 function goToPage(href) {
-  var u=new URL(href,window.location.href);
-  u.searchParams.set('f','json');
-  fetch(u.toString())
-    .then(function(r){return r.json();})
-    .then(function(data){
-      var newFeats=data.features||[];
-      var newTotal=data.numberMatched||newFeats.length;
-      var newPrev='',newNext='';
-      (data.links||[]).forEach(function(l){
-        if(l.rel==='next')newNext=toRelPath(l.href);
-        if(l.rel==='prev')newPrev=toRelPath(l.href);
-      });
-      loadPage(newFeats,newTotal,newPrev,newNext,href);
-    })
-    .catch(function(){window.location.href=href;});
+  var u=new URL(href,window.location.href); u.searchParams.set('f','json');
+  fetch(u.toString()).then(function(r){return r.json();}).then(function(data){
+    var nf=data.features||[],nt=data.numberMatched||nf.length,np='',nn='';
+    (data.links||[]).forEach(function(l){if(l.rel==='next')nn=toRelPath(l.href);if(l.rel==='prev')np=toRelPath(l.href);});
+    loadPage(nf,nt,np,nn,href);
+  }).catch(function(){window.location.href=href;});
 }
-
 document.addEventListener('click',function(e){
   var a=e.target.closest('#prev-btn-top,#next-btn-top,#prev-btn-bot,#next-btn-bot');
   if(!a||!a.href||a.href==='#')return;
-  e.preventDefault();
-  goToPage(a.href);
+  e.preventDefault(); goToPage(a.href);
 });
 
-// ── Map setup ─────────────────────────────────────────────────────────────────
+// ── Polygon draw state ────────────────────────────────────────────────────────
+var polyMode = false;
+var polyVerts = []; // [[lng,lat],...]
+
+function setPolyMode(on) {
+  polyMode = on;
+  polyVerts = [];
+  map.getCanvas().style.cursor = on ? 'crosshair' : '';
+  if (on) { map.dragPan.disable(); map.doubleClickZoom.disable(); }
+  else    { map.dragPan.enable();  map.doubleClickZoom.enable(); }
+  document.getElementById('poly-hint').style.display = on ? '' : 'none';
+  var btn = document.getElementById('draw-poly-btn');
+  if (on) { btn.textContent = 'Cancel polygon'; btn.classList.add('drawing'); }
+  else    { btn.textContent = 'Draw Polygon';   btn.classList.remove('drawing'); }
+  refreshDrawLayers(null);
+}
+
+function refreshDrawLayers(mouse) {
+  if (!map.getSource('draw-fill')) return;
+  var verts = polyVerts.slice();
+  var preview = mouse ? verts.concat([mouse]) : verts;
+
+  // Outline: vertices + mouse cursor + closing edge back to first
+  var line = preview.slice();
+  if (preview.length >= 2) line = line.concat([preview[0]]);
+  map.getSource('draw-outline').setData({type:'Feature',geometry:{type:'LineString',coordinates:line}});
+
+  // Fill: only when 3+ points
+  var ring = preview.length >= 3 ? preview.concat([preview[0]]) : [];
+  map.getSource('draw-fill').setData({type:'Feature',geometry:{type:'Polygon',coordinates:[ring]}});
+
+  // Vertex circles — first vertex styled differently as close target
+  map.getSource('draw-verts').setData({type:'FeatureCollection',features:polyVerts.map(function(v,i){
+    return {type:'Feature',id:i,geometry:{type:'Point',coordinates:v},properties:{first:i===0}};
+  })});
+}
+
+function snapToFirst(point) {
+  if (polyVerts.length < 3) return false;
+  var px = map.project(polyVerts[0]);
+  var dx = point.x - px.x, dy = point.y - px.y;
+  return Math.sqrt(dx*dx+dy*dy) < 14;
+}
+
+function commitPolygon() {
+  if (polyVerts.length < 3) return;
+  var coords = polyVerts.map(function(v){return v[0].toFixed(6)+' '+v[1].toFixed(6);}).join(', ');
+  var first  = polyVerts[0][0].toFixed(6)+' '+polyVerts[0][1].toFixed(6);
+  var wkt    = 'POLYGON(('+coords+', '+first+'))';
+  var filter = 'S_INTERSECTS('+geomCol+', '+wkt+')';
+  setPolyMode(false);
+  var url = new URL(window.location.href);
+  url.searchParams.set('filter', filter);
+  url.searchParams.set('filter-lang', 'cql2-text');
+  url.searchParams.delete('offset');
+  window.location.href = url.toString();
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && polyMode) setPolyMode(false);
+  if (e.key === 'Enter'  && polyMode && polyVerts.length >= 3) commitPolygon();
+});
+
+// ── Map load ──────────────────────────────────────────────────────────────────
 map.on('load', function() {
-  map.addSource('features',{type:'geojson',data:toFC(features)});
+
+  // Feature data sources
+  map.addSource('features', {type:'geojson', data:toFC(features)});
+  map.addSource('centroids',{type:'geojson', data:toCentroids(features)});
+
+  // Polygon-draw sources (empty until drawing starts)
+  map.addSource('draw-fill',    {type:'geojson',data:{type:'Feature',geometry:{type:'Polygon',coordinates:[[]]}}});
+  map.addSource('draw-outline', {type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}}});
+  map.addSource('draw-verts',   {type:'geojson',data:{type:'FeatureCollection',features:[]}});
+
+  // Feature layers
   map.addLayer({id:'feat-fill',type:'fill',source:'features',
     filter:['in','$type','Polygon'],
     paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.65,['boolean',['feature-state','hover'],false],0.45,0.2]}});
-  map.addLayer({id:'feat-fill-selected',type:'line',source:'features',
+  map.addLayer({id:'feat-fill-sel',type:'line',source:'features',
     filter:['in','$type','Polygon'],
-    paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],3,0],'line-opacity':1}});
+    paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],3,0]}});
   map.addLayer({id:'feat-line',type:'line',source:'features',
-    paint:{'line-color':brandColor,
-      'line-width':['interpolate',['linear'],['zoom'],
-        4,['case',['boolean',['feature-state','selected'],false],4,1.5],
-        10,['case',['boolean',['feature-state','selected'],false],6,2.5]]}});
+    paint:{'line-color':brandColor,'line-width':['interpolate',['linear'],['zoom'],4,['case',['boolean',['feature-state','selected'],false],4,1.5],10,['case',['boolean',['feature-state','selected'],false],6,2.5]]}});
   map.addLayer({id:'feat-circle',type:'circle',source:'features',
     filter:['in','$type','Point'],
     paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','selected'],false],10,['boolean',['feature-state','hover'],false],8,6],
       'circle-opacity':0.85,'circle-stroke-width':['case',['boolean',['feature-state','selected'],false],2.5,1.5],'circle-stroke-color':'#fff'}});
-  map.addSource('centroids',{type:'geojson',data:toCentroids(features)});
   map.addLayer({id:'feat-centroid',type:'circle',source:'centroids',
-    paint:{'circle-color':brandColor,
-      'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,11,5],
+    paint:{'circle-color':brandColor,'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,11,5],
       'circle-opacity':['interpolate',['linear'],['zoom'],4,0.75,7,0],
       'circle-stroke-width':1,'circle-stroke-color':'#fff',
       'circle-stroke-opacity':['interpolate',['linear'],['zoom'],4,0.75,7,0]}});
 
-  var bounds=computeBounds(features);
-  featureBounds=bounds;
-  if(bounds){map.fitBounds(bounds,{padding:40,maxZoom:14});document.getElementById('fit-btn').style.display='';}
+  // Polygon-draw layers
+  map.addLayer({id:'draw-fill-layer',type:'fill',source:'draw-fill',
+    paint:{'fill-color':brandColor,'fill-opacity':0.12}});
+  map.addLayer({id:'draw-outline-layer',type:'line',source:'draw-outline',
+    paint:{'line-color':brandColor,'line-width':2,'line-dasharray':[5,3]}});
+  // Regular vertices (hollow circles)
+  map.addLayer({id:'draw-verts-layer',type:'circle',source:'draw-verts',
+    paint:{'circle-radius':5,'circle-color':'#fff','circle-stroke-width':2,'circle-stroke-color':brandColor}});
+  // First vertex (filled — snap target)
+  map.addLayer({id:'draw-first-vert',type:'circle',source:'draw-verts',
+    filter:['==',['get','first'],true],
+    paint:{'circle-radius':7,'circle-color':brandColor,'circle-stroke-width':2.5,'circle-stroke-color':'#fff'}});
+
+  // Initial map fit
+  var bounds = computeBounds(features); featureBounds = bounds;
+  if (bounds) { map.fitBounds(bounds,{padding:40,maxZoom:14}); document.getElementById('fit-btn').style.display=''; }
   document.getElementById('use-view-btn').style.display='';
   document.getElementById('draw-bbox-btn').style.display='';
+  document.getElementById('draw-poly-btn').style.display='';
 
+  // ── Map events ──────────────────────────────────────────────────────────────
+
+  // Polygon draw: click to add vertex or snap-close
+  map.on('click', function(e) {
+    if (!polyMode) return;
+    if (snapToFirst(e.point)) { commitPolygon(); return; }
+    polyVerts.push([e.lngLat.lng, e.lngLat.lat]);
+    refreshDrawLayers(null);
+  });
+
+  // Polygon draw: double-click to close (≥3 verts)
+  map.on('dblclick', function(e) {
+    if (!polyMode || polyVerts.length < 3) return;
+    e.preventDefault();
+    commitPolygon();
+  });
+
+  // Polygon draw: live preview on mouse move
+  map.on('mousemove', function(e) {
+    if (!polyMode || polyVerts.length === 0) return;
+    refreshDrawLayers([e.lngLat.lng, e.lngLat.lat]);
+    map.getCanvas().style.cursor = snapToFirst(e.point) ? 'pointer' : 'crosshair';
+  });
+
+  // Feature hover / click (skip when polygon draw mode is active)
   function clearHover(){if(hoveredId!==null){map.setFeatureState({source:'features',id:hoveredId},{hover:false});hoveredId=null;}}
-  map.on('click','feat-centroid',function(e){var f=features[e.features[0].id];if(f)showPanel(f);});
-  map.on('mousemove','feat-centroid',function(){map.getCanvas().style.cursor='pointer';});
-  map.on('mouseleave','feat-centroid',function(){if(!drawMode)map.getCanvas().style.cursor='';});
+  map.on('click','feat-centroid',function(e){if(polyMode)return;var f=features[e.features[0].id];if(f)showPanel(f);});
+  map.on('mousemove','feat-centroid',function(){if(!polyMode&&!bboxDrawMode)map.getCanvas().style.cursor='pointer';});
+  map.on('mouseleave','feat-centroid',function(){if(!polyMode&&!bboxDrawMode)map.getCanvas().style.cursor='';});
   ['feat-fill','feat-line','feat-circle'].forEach(function(lid){
-    map.on('click',lid,function(e){var f=features[e.features[0].id];if(f)showPanel(f);});
+    map.on('click',lid,function(e){if(polyMode)return;var f=features[e.features[0].id];if(f)showPanel(f);});
     map.on('mousemove',lid,function(e){
-      if(drawMode)return;
+      if(polyMode||bboxDrawMode)return;
       if(e.features.length>0){clearHover();hoveredId=e.features[0].id;map.setFeatureState({source:'features',id:hoveredId},{hover:true});}
       map.getCanvas().style.cursor='pointer';
     });
-    map.on('mouseleave',lid,function(){if(!drawMode){clearHover();map.getCanvas().style.cursor='';}});
+    map.on('mouseleave',lid,function(){if(!polyMode&&!bboxDrawMode){clearHover();map.getCanvas().style.cursor='';}});
   });
 });
 
 // ── Table row click ───────────────────────────────────────────────────────────
-document.getElementById('tbody').addEventListener('click', function(e) {
-  if (e.target.tagName === 'A') return;
-  var row = e.target.closest('tr[data-idx]');
-  if (!row) return;
-  var f = features[parseInt(row.dataset.idx, 10)];
-  if (f) showPanel(f);
+document.getElementById('tbody').addEventListener('click',function(e){
+  if(e.target.tagName==='A')return;
+  var row=e.target.closest('tr[data-idx]'); if(!row)return;
+  var f=features[parseInt(row.dataset.idx,10)]; if(f)showPanel(f);
 });
 
 // ── Scrollbar sync ────────────────────────────────────────────────────────────
-var topScroll = document.getElementById('table-scroll-top');
-var mainScroll = document.getElementById('table-scroll-main');
-var scrollSizer = document.getElementById('table-scroll-sizer');
-function syncScrollerWidth() {
-  var t = document.getElementById('features-table');
-  scrollSizer.style.width = t ? t.offsetWidth + 'px' : '100%';
-}
-topScroll.addEventListener('scroll', function() { mainScroll.scrollLeft = topScroll.scrollLeft; });
-mainScroll.addEventListener('scroll', function() { topScroll.scrollLeft = mainScroll.scrollLeft; });
-new ResizeObserver(syncScrollerWidth).observe(document.getElementById('features-table') || document.body);
+var topScroll=document.getElementById('table-scroll-top');
+var mainScroll=document.getElementById('table-scroll-main');
+var scrollSizer=document.getElementById('table-scroll-sizer');
+function syncScrollerWidth(){var t=document.getElementById('features-table');scrollSizer.style.width=t?t.offsetWidth+'px':'100%';}
+topScroll.addEventListener('scroll',function(){mainScroll.scrollLeft=topScroll.scrollLeft;});
+mainScroll.addEventListener('scroll',function(){topScroll.scrollLeft=mainScroll.scrollLeft;});
+new ResizeObserver(syncScrollerWidth).observe(document.getElementById('features-table')||document.body);
 renderTable(features);
 
 // ── Feature panel ─────────────────────────────────────────────────────────────
 function showPanel(f) {
   setSelectedFeature(features.indexOf(f));
-  var props = f.properties || {};
-  var entries = Object.entries(props).filter(function(e) {
-    return e[1] !== null && e[1] !== '' && e[1] !== undefined && !e[0].match(/^bbox_/i);
-  });
-  var id = f.id !== undefined ? f.id : '';
-  var panelLink = document.getElementById('panel-id');
-  panelLink.textContent = 'Feature: ' + id;
-  panelLink.href = '/collections/' + colID + '/items/' + id;
-  var rows = entries.map(function(e) {
-    return '<tr><td style="font-weight:600;color:#475569;padding:0.4rem 1rem;white-space:nowrap;vertical-align:top">' + e[0] + '</td>' +
-      '<td style="padding:0.4rem 1rem;word-break:break-word;max-width:220px">' + String(e[1]) + '</td></tr>';
+  var props=f.properties||{},id=f.id!==undefined?f.id:'';
+  var entries=Object.entries(props).filter(function(e){return e[1]!==null&&e[1]!==''&&e[1]!==undefined&&!e[0].match(/^bbox_/i);});
+  var panelLink=document.getElementById('panel-id');
+  panelLink.textContent='Feature: '+id; panelLink.href='/collections/'+colID+'/items/'+id;
+  var rows=entries.map(function(e){
+    return '<tr><td style="font-weight:600;color:#475569;padding:0.4rem 1rem;white-space:nowrap;vertical-align:top">'+e[0]+'</td>'+
+      '<td style="padding:0.4rem 1rem;word-break:break-word;max-width:220px">'+String(e[1])+'</td></tr>';
   }).join('');
-  document.getElementById('panel-table').innerHTML =
-    '<thead><tr>' +
-    '<th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Property</th>' +
-    '<th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Value</th>' +
-    '</tr></thead><tbody>' + (rows || '<tr><td colspan="2" class="text-muted p-3">No properties</td></tr>') + '</tbody>';
-  document.getElementById('feat-panel').style.display = '';
+  document.getElementById('panel-table').innerHTML=
+    '<thead><tr><th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Property</th>'+
+    '<th style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.05em;padding:0.4rem 1rem">Value</th></tr></thead>'+
+    '<tbody>'+(rows||'<tr><td colspan="2" class="text-muted p-3">No properties</td></tr>')+'</tbody>';
+  document.getElementById('feat-panel').style.display='';
 }
-function closePanel() { document.getElementById('feat-panel').style.display = 'none'; setSelectedFeature(null); }
+function closePanel(){document.getElementById('feat-panel').style.display='none';setSelectedFeature(null);}
 
 // ── Use View ──────────────────────────────────────────────────────────────────
-document.getElementById('use-view-btn').onclick = function() {
-  var b = map.getBounds();
-  var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(function(v){ return v.toFixed(6); }).join(',');
-  var url = new URL(window.location.href);
-  url.searchParams.set('bbox', bbox); url.searchParams.delete('offset');
-  window.location.href = url.toString();
+document.getElementById('use-view-btn').onclick=function(){
+  var b=map.getBounds(),bbox=[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()].map(function(v){return v.toFixed(6);}).join(',');
+  var url=new URL(window.location.href); url.searchParams.set('bbox',bbox); url.searchParams.delete('offset');
+  window.location.href=url.toString();
 };
-
-// ── Fit to features ───────────────────────────────────────────────────────────
-document.getElementById('fit-btn').onclick = function() {
-  if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
-};
+document.getElementById('fit-btn').onclick=function(){if(featureBounds)map.fitBounds(featureBounds,{padding:40,maxZoom:14});};
 
 // ── Draw Bbox ─────────────────────────────────────────────────────────────────
-var drawMode = false, drawStart = null;
-var drawRectEl = document.createElement('div');
-drawRectEl.style.cssText = 'position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;display:none;z-index:5';
-document.getElementById('map').appendChild(drawRectEl);
+var bboxDrawMode=false, bboxStart=null;
+var bboxRectEl=document.createElement('div');
+bboxRectEl.style.cssText='position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;display:none;z-index:5';
+document.getElementById('map').appendChild(bboxRectEl);
 
-document.getElementById('draw-bbox-btn').onclick = function() {
-  if (drawMode) { exitDrawMode(); }
-  else {
-    drawMode = true;
-    map.getCanvas().style.cursor = 'crosshair';
-    map.dragPan.disable();
-    this.textContent = 'Cancel'; this.style.background = 'var(--brand-border)';
+document.getElementById('draw-bbox-btn').onclick=function(){
+  if(bboxDrawMode){exitBboxDraw();}else{
+    bboxDrawMode=true; map.getCanvas().style.cursor='crosshair'; map.dragPan.disable();
+    this.textContent='Cancel'; this.style.background='var(--brand-border)';
   }
 };
-function exitDrawMode() {
-  drawMode = false; drawStart = null;
-  map.getCanvas().style.cursor = ''; map.dragPan.enable(); drawRectEl.style.display = 'none';
-  var btn = document.getElementById('draw-bbox-btn');
-  btn.textContent = 'Draw Bbox'; btn.style.background = '';
+function exitBboxDraw(){
+  bboxDrawMode=false; bboxStart=null; map.getCanvas().style.cursor=''; map.dragPan.enable();
+  bboxRectEl.style.display='none';
+  var btn=document.getElementById('draw-bbox-btn'); btn.textContent='Draw Bbox'; btn.style.background='';
 }
-var canvas = map.getCanvas();
-canvas.addEventListener('mousedown', function(e) {
-  if (!drawMode) return; e.preventDefault();
-  drawStart = {x: e.offsetX, y: e.offsetY, ll: map.unproject([e.offsetX, e.offsetY])};
-  drawRectEl.style.cssText = 'position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;z-index:5';
-  drawRectEl.style.left = e.offsetX+'px'; drawRectEl.style.top = e.offsetY+'px';
-  drawRectEl.style.width = '0'; drawRectEl.style.height = '0';
+var canvas=map.getCanvas();
+canvas.addEventListener('mousedown',function(e){
+  if(!bboxDrawMode)return; e.preventDefault();
+  bboxStart={x:e.offsetX,y:e.offsetY,ll:map.unproject([e.offsetX,e.offsetY])};
+  bboxRectEl.style.cssText='position:absolute;border:2px solid #4338ca;background:rgba(67,56,202,0.12);pointer-events:none;z-index:5';
+  bboxRectEl.style.left=e.offsetX+'px'; bboxRectEl.style.top=e.offsetY+'px'; bboxRectEl.style.width='0'; bboxRectEl.style.height='0';
 });
-canvas.addEventListener('mousemove', function(e) {
-  if (!drawMode || !drawStart) return;
-  var x=Math.min(drawStart.x,e.offsetX), y=Math.min(drawStart.y,e.offsetY);
-  drawRectEl.style.left=x+'px'; drawRectEl.style.top=y+'px';
-  drawRectEl.style.width=Math.abs(e.offsetX-drawStart.x)+'px'; drawRectEl.style.height=Math.abs(e.offsetY-drawStart.y)+'px';
+canvas.addEventListener('mousemove',function(e){
+  if(!bboxDrawMode||!bboxStart)return;
+  var x=Math.min(bboxStart.x,e.offsetX),y=Math.min(bboxStart.y,e.offsetY);
+  bboxRectEl.style.left=x+'px'; bboxRectEl.style.top=y+'px';
+  bboxRectEl.style.width=Math.abs(e.offsetX-bboxStart.x)+'px'; bboxRectEl.style.height=Math.abs(e.offsetY-bboxStart.y)+'px';
 });
-canvas.addEventListener('mouseup', function(e) {
-  if (!drawMode || !drawStart) return;
-  var endLL = map.unproject([e.offsetX, e.offsetY]);
-  var bbox = [Math.min(drawStart.ll.lng,endLL.lng),Math.min(drawStart.ll.lat,endLL.lat),
-    Math.max(drawStart.ll.lng,endLL.lng),Math.max(drawStart.ll.lat,endLL.lat)].map(function(v){return v.toFixed(6);}).join(',');
-  exitDrawMode();
-  var url = new URL(window.location.href);
-  url.searchParams.set('bbox', bbox); url.searchParams.delete('offset');
-  window.location.href = url.toString();
+canvas.addEventListener('mouseup',function(e){
+  if(!bboxDrawMode||!bboxStart)return;
+  var endLL=map.unproject([e.offsetX,e.offsetY]);
+  var bbox=[Math.min(bboxStart.ll.lng,endLL.lng),Math.min(bboxStart.ll.lat,endLL.lat),
+    Math.max(bboxStart.ll.lng,endLL.lng),Math.max(bboxStart.ll.lat,endLL.lat)].map(function(v){return v.toFixed(6);}).join(',');
+  exitBboxDraw();
+  var url=new URL(window.location.href); url.searchParams.set('bbox',bbox); url.searchParams.delete('offset');
+  window.location.href=url.toString();
 });
 
+// ── Draw Polygon button ───────────────────────────────────────────────────────
+document.getElementById('draw-poly-btn').onclick=function(){
+  if(polyMode) setPolyMode(false);
+  else { if(bboxDrawMode)exitBboxDraw(); setPolyMode(true); }
+};
+
 // ── Limit ─────────────────────────────────────────────────────────────────────
-document.getElementById('limit-sel').onchange = function() {
-  var url = new URL(window.location.href);
-  url.searchParams.set('limit', this.value); url.searchParams.delete('offset');
-  window.location.href = url.toString();
+document.getElementById('limit-sel').onchange=function(){
+  var url=new URL(window.location.href); url.searchParams.set('limit',this.value); url.searchParams.delete('offset');
+  window.location.href=url.toString();
 };
 
 // ── Filter panel ──────────────────────────────────────────────────────────────
-var filterPanel = document.getElementById('filter-panel');
-var filterToggle = document.getElementById('filter-toggle');
-var filterRowsEl = document.getElementById('filter-rows');
-var queryables = {};
-var panelOpen = false;
-var pendingRows = [];
+var filterPanel=document.getElementById('filter-panel');
+var filterToggle=document.getElementById('filter-toggle');
+var filterRowsEl=document.getElementById('filter-rows');
+var queryables={}, panelOpen=false, pendingRows=[];
 
-filterToggle.onclick = function() {
-  panelOpen = !panelOpen;
-  filterPanel.style.display = panelOpen ? '' : 'none';
-  filterToggle.textContent = panelOpen ? 'Filter ▴' : 'Filter ▾';
-  if (panelOpen && Object.keys(queryables).length === 0) loadQueryables();
+filterToggle.onclick=function(){
+  panelOpen=!panelOpen; filterPanel.style.display=panelOpen?'':'none';
+  filterToggle.textContent=panelOpen?'Filter ▴':'Filter ▾';
+  if(panelOpen&&Object.keys(queryables).length===0)loadQueryables();
 };
 
 function loadQueryables(cb) {
-  document.getElementById('queryables-status').textContent = '(loading…)';
-  fetch('/collections/' + colID + '/queryables')
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
-      queryables = data.properties || {};
-      document.getElementById('queryables-status').textContent = '';
-      if (pendingRows.length > 0) {
-        pendingRows.forEach(function(r) { addFilterRow(r.prop, r.op, r.val); });
-        pendingRows = [];
-      } else if (filterRowsEl.children.length === 0) {
-        addFilterRow();
-      } else {
-        Array.from(filterRowsEl.querySelectorAll('.prop-sel')).forEach(function(sel) {
-          var cur = sel.value; populatePropSelect(sel); sel.value = cur;
-        });
-      }
-      if (cb) cb();
+  document.getElementById('queryables-status').textContent='(loading…)';
+  fetch('/collections/'+colID+'/queryables')
+    .then(function(r){return r.json();})
+    .then(function(data){
+      queryables=data.properties||{};
+      document.getElementById('queryables-status').textContent='';
+      if(pendingRows.length>0){pendingRows.forEach(function(r){addFilterRow(r.prop,r.op,r.val);});pendingRows=[];}
+      else if(filterRowsEl.children.length===0){addFilterRow();}
+      else{Array.from(filterRowsEl.querySelectorAll('.prop-sel')).forEach(function(sel){var cur=sel.value;populatePropSelect(sel);sel.value=cur;});}
+      if(cb)cb();
     })
-    .catch(function(){ document.getElementById('queryables-status').textContent = '(unavailable)'; });
+    .catch(function(){document.getElementById('queryables-status').textContent='(unavailable)';});
 }
 
-function populatePropSelect(sel) {
-  var cur = sel.value;
-  sel.innerHTML = '<option value="">— property —</option>' +
-    Object.keys(queryables).map(function(k) {
-      var label = (queryables[k] && queryables[k].title) || k;
-      return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+label+'</option>';
-    }).join('');
+function populatePropSelect(sel){
+  var cur=sel.value;
+  sel.innerHTML='<option value="">— property —</option>'+Object.keys(queryables).map(function(k){
+    var label=(queryables[k]&&queryables[k].title)||k;
+    return'<option value="'+k+'"'+(k===cur?' selected':'')+'>'+label+'</option>';
+  }).join('');
 }
 
-var OPERATORS = ['=', '<>', '>', '<', '>=', '<=', 'LIKE', 'IS NULL', 'IS NOT NULL'];
+var OPERATORS=['=','<>','>','<','>=','<=','LIKE','IS NULL','IS NOT NULL'];
 
-function addFilterRow(prop, op, val) {
-  var row = document.createElement('div');
-  row.className = 'd-flex gap-2 align-items-center flex-wrap';
-  row.innerHTML =
-    '<select class="form-select form-select-sm prop-sel" style="flex:1 1 140px;min-width:0"></select>' +
-    '<select class="form-select form-select-sm op-sel" style="flex:1 1 100px;min-width:0">' +
-    OPERATORS.map(function(o){ return '<option'+(o===(op||'=')?' selected':'')+'>'+o+'</option>'; }).join('') +
-    '</select>' +
+function addFilterRow(prop,op,val){
+  var row=document.createElement('div'); row.className='d-flex gap-2 align-items-center flex-wrap';
+  row.innerHTML='<select class="form-select form-select-sm prop-sel" style="flex:1 1 140px;min-width:0"></select>'+
+    '<select class="form-select form-select-sm op-sel" style="flex:1 1 100px;min-width:0">'+
+    OPERATORS.map(function(o){return'<option'+(o===(op||'=')?' selected':'')+'>'+o+'</option>';}).join('')+'</select>'+
     '<input class="form-control form-control-sm val-inp" placeholder="value" style="flex:1 1 120px;min-width:0" value="'+(val||'')+'">' +
     '<button class="btn btn-json btn-sm flex-shrink-0" onclick="this.closest(\'.d-flex\').remove()">✕</button>';
   filterRowsEl.appendChild(row);
-  var sel = row.querySelector('.prop-sel');
-  if (Object.keys(queryables).length > 0) { populatePropSelect(sel); if (prop) sel.value = prop; }
-  var opSel = row.querySelector('.op-sel'), valInp = row.querySelector('.val-inp');
-  function syncVal() { valInp.style.display = (opSel.value === 'IS NULL' || opSel.value === 'IS NOT NULL') ? 'none' : ''; }
-  opSel.onchange = syncVal;
-  if (op) syncVal();
+  var sel=row.querySelector('.prop-sel');
+  if(Object.keys(queryables).length>0){populatePropSelect(sel);if(prop)sel.value=prop;}
+  var opSel=row.querySelector('.op-sel'),valInp=row.querySelector('.val-inp');
+  function syncVal(){valInp.style.display=(opSel.value==='IS NULL'||opSel.value==='IS NOT NULL')?'none':'';}
+  opSel.onchange=syncVal; if(op)syncVal();
 }
 
-function buildCQL2() {
-  var parts = [];
-  Array.from(filterRowsEl.children).forEach(function(row) {
-    var prop = row.querySelector('.prop-sel').value;
-    var op = row.querySelector('.op-sel').value;
-    var val = row.querySelector('.val-inp').value;
-    if (!prop) return;
-    if (op === 'IS NULL' || op === 'IS NOT NULL') { parts.push(prop + ' ' + op); return; }
-    if (!val) return;
-    var q = queryables[prop], typ = q ? q.type : 'string';
-    if (typ === 'integer' || typ === 'number') { parts.push(prop + ' ' + op + ' ' + val); }
-    else { parts.push(prop + ' ' + op + " '" + val.replace(/'/g, "''") + "'"); }
+function buildCQL2(){
+  var parts=[];
+  Array.from(filterRowsEl.children).forEach(function(row){
+    var prop=row.querySelector('.prop-sel').value,op=row.querySelector('.op-sel').value,val=row.querySelector('.val-inp').value;
+    if(!prop)return;
+    if(op==='IS NULL'||op==='IS NOT NULL'){parts.push(prop+' '+op);return;}
+    if(!val)return;
+    var q=queryables[prop],typ=q?q.type:'string';
+    if(typ==='integer'||typ==='number'){parts.push(prop+' '+op+' '+val);}
+    else{parts.push(prop+' '+op+" '"+val.replace(/'/g,"''")+"'");}
   });
   return parts.join(' AND ');
 }
-
-function applyFilters() {
-  var cql = buildCQL2();
-  var url = new URL(window.location.href);
-  if (cql) { url.searchParams.set('filter', cql); url.searchParams.set('filter-lang', 'cql2-text'); }
-  else { url.searchParams.delete('filter'); url.searchParams.delete('filter-lang'); }
-  url.searchParams.delete('offset');
-  window.location.href = url.toString();
+function applyFilters(){
+  var cql=buildCQL2(),url=new URL(window.location.href);
+  if(cql){url.searchParams.set('filter',cql);url.searchParams.set('filter-lang','cql2-text');}
+  else{url.searchParams.delete('filter');url.searchParams.delete('filter-lang');}
+  url.searchParams.delete('offset'); window.location.href=url.toString();
 }
-function clearFilters() {
-  var url = new URL(window.location.href);
-  url.searchParams.delete('filter'); url.searchParams.delete('filter-lang'); url.searchParams.delete('offset');
-  window.location.href = url.toString();
+function clearFilters(){
+  var url=new URL(window.location.href);
+  url.searchParams.delete('filter');url.searchParams.delete('filter-lang');url.searchParams.delete('offset');
+  window.location.href=url.toString();
 }
 
-(function() {
-  var urlFilter = new URL(window.location.href).searchParams.get('filter');
-  if (!urlFilter) return;
-  var re = /(\w+)\s+(IS NOT NULL|IS NULL|>=|<=|<>|LIKE|>|<|=)\s*(?:'([^']*)'|([\S]+))?/gi;
-  var m, rows = [];
-  while ((m = re.exec(urlFilter)) !== null) {
-    rows.push({prop: m[1], op: m[2].toUpperCase(), val: m[3] !== undefined ? m[3] : (m[4] || '')});
-  }
-  if (rows.length > 0) {
-    panelOpen = true; filterPanel.style.display = ''; filterToggle.textContent = 'Filter ▴';
-    pendingRows = rows; loadQueryables();
-  }
+(function(){
+  var urlFilter=new URL(window.location.href).searchParams.get('filter');
+  if(!urlFilter)return;
+  var re=/(\w+)\s+(IS NOT NULL|IS NULL|>=|<=|<>|LIKE|>|<|=)\s*(?:'([^']*)'|([\S]+))?/gi,m,rows=[];
+  while((m=re.exec(urlFilter))!==null)rows.push({prop:m[1],op:m[2].toUpperCase(),val:m[3]!==undefined?m[3]:(m[4]||'')});
+  if(rows.length>0){panelOpen=true;filterPanel.style.display='';filterToggle.textContent='Filter ▴';pendingRows=rows;loadQueryables();}
 })();
 
 // ── Columns panel ─────────────────────────────────────────────────────────────
-var colsPanel = document.getElementById('cols-panel');
-var colsToggle = document.getElementById('cols-toggle');
-var colsPanelOpen = false;
-var allColNames = []; // populated when panel opens
+var colsPanel=document.getElementById('cols-panel');
+var colsToggle=document.getElementById('cols-toggle');
+var colsPanelOpen=false, allColNames=[];
 
-colsToggle.onclick = function() {
-  colsPanelOpen = !colsPanelOpen;
-  colsPanel.style.display = colsPanelOpen ? '' : 'none';
-  colsToggle.textContent = colsPanelOpen ? 'Columns ▴' : 'Columns ▾';
-  if (colsPanelOpen && allColNames.length === 0) {
-    // Derive column list: from features if available, otherwise load queryables
-    if (features.length > 0) {
-      allColNames = Object.keys(features[0].properties || {}).filter(function(p){return !p.match(/^bbox_/i);});
-      renderColsPanel();
-    } else {
-      // No features on this page — load from queryables
-      if (Object.keys(queryables).length > 0) {
-        allColNames = Object.keys(queryables);
-        renderColsPanel();
-      } else {
-        loadQueryables(function() { allColNames = Object.keys(queryables); renderColsPanel(); });
-      }
-    }
+colsToggle.onclick=function(){
+  colsPanelOpen=!colsPanelOpen; colsPanel.style.display=colsPanelOpen?'':'none';
+  colsToggle.textContent=colsPanelOpen?'Columns ▴':'Columns ▾';
+  if(colsPanelOpen&&allColNames.length===0){
+    if(features.length>0){allColNames=Object.keys(features[0].properties||{}).filter(function(p){return!p.match(/^bbox_/i);});renderColsPanel();}
+    else if(Object.keys(queryables).length>0){allColNames=Object.keys(queryables);renderColsPanel();}
+    else{loadQueryables(function(){allColNames=Object.keys(queryables);renderColsPanel();});}
   }
 };
 
-function renderColsPanel() {
-  var currentCols = new URL(window.location.href).searchParams.get('properties') || '';
-  var selected = currentCols ? currentCols.split(',').reduce(function(acc,s){acc[s.trim()]=true;return acc;},{}) : null;
-  var html = allColNames.map(function(p) {
-    var checked = selected ? !!selected[p] : true; // all checked when no ?properties param
-    return '<label class="col-checkbox-label"><input type="checkbox" value="'+p+'"'+(checked?' checked':'')+'>'+p+'</label>';
+function renderColsPanel(){
+  var currentCols=new URL(window.location.href).searchParams.get('properties')||'';
+  var selected=currentCols?currentCols.split(',').reduce(function(acc,s){acc[s.trim()]=true;return acc;},{}):null;
+  var html=allColNames.map(function(p){
+    var checked=selected?!!selected[p]:true;
+    return'<label class="col-checkbox-label"><input type="checkbox" value="'+p+'"'+(checked?' checked':'')+'>'+p+'</label>';
   }).join('');
-  document.getElementById('cols-checkboxes').innerHTML = html || '<span class="text-muted small">No properties available</span>';
+  document.getElementById('cols-checkboxes').innerHTML=html||'<span class="text-muted small">No properties available</span>';
 }
-
-function applyColumns() {
-  var checked = Array.from(document.querySelectorAll('#cols-checkboxes input:checked')).map(function(i){return i.value;});
-  var url = new URL(window.location.href);
-  if (checked.length > 0 && checked.length < allColNames.length) {
-    url.searchParams.set('properties', checked.join(','));
-  } else {
-    url.searchParams.delete('properties'); // no filter needed when all selected
-  }
-  url.searchParams.delete('offset');
-  window.location.href = url.toString();
+function applyColumns(){
+  var checked=Array.from(document.querySelectorAll('#cols-checkboxes input:checked')).map(function(i){return i.value;});
+  var url=new URL(window.location.href);
+  if(checked.length>0&&checked.length<allColNames.length){url.searchParams.set('properties',checked.join(','));}
+  else{url.searchParams.delete('properties');}
+  url.searchParams.delete('offset'); window.location.href=url.toString();
 }
-
-function selectAllCols(checked) {
-  Array.from(document.querySelectorAll('#cols-checkboxes input')).forEach(function(i){i.checked = checked;});
-}
-
-function resetColumns() { clearParam('properties'); }
+function selectAllCols(checked){Array.from(document.querySelectorAll('#cols-checkboxes input')).forEach(function(i){i.checked=checked;});}
+function resetColumns(){clearParam('properties');}
 </script>
 </body>
 </html>

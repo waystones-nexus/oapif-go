@@ -397,13 +397,16 @@ func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
 		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
-		// OGC API Features Part 3 — filtering
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/html",
+		// OGC API Features Part 2 — CRS by Reference
+		"http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs",
+		// OGC API Features Part 3 — Filtering
 		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
 		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
-		// CQL2 — text, JSON, basic comparisons, spatial, temporal
+		// OGC CQL2
+		// Note: case-insensitive-comparison (CASEI/ACCENTI functions) is NOT claimed — not implemented.
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
 		"http://www.opengis.net/spec/cql2/1.0/conf/advanced-comparison-operators",
-		"http://www.opengis.net/spec/cql2/1.0/conf/case-insensitive-comparison",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/spatial-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/temporal-operators",
@@ -763,6 +766,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 			Filter:       q.Get("filter"),
 			Sortby:       strings.Join(q["sortby"], ","),
 			Properties:   q.Get("properties"),
+			GeomColumn:   col.GeomColumn,
 			PrevHref:     prevHref,
 			NextHref:     nextHref,
 		})
