@@ -66,10 +66,25 @@ var map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// Assign distinct colours per collection so overlapping bboxes are distinguishable.
+// Generate N shades of the brand colour by stepping lightness from 35% → 62%.
+// All shades share the brand hue/saturation so the map stays on-brand.
+function hexToHsl(hex) {
+  hex = hex.replace('#','');
+  var r=parseInt(hex.slice(0,2),16)/255, g=parseInt(hex.slice(2,4),16)/255, b=parseInt(hex.slice(4,6),16)/255;
+  var max=Math.max(r,g,b), min=Math.min(r,g,b), h=0, s=0, l=(max+min)/2;
+  if (max!==min) {
+    var d=max-min; s=l>0.5?d/(2-max-min):d/(max+min);
+    switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break;}
+    h/=6;
+  }
+  return [Math.round(h*360), Math.round(s*100), Math.round(l*100)];
+}
+var _brandHsl = null;
 function colourForIndex(i, total) {
-  var hue = Math.round((i / Math.max(total, 1)) * 360);
-  return 'hsl(' + hue + ',60%,45%)';
+  if (!_brandHsl) _brandHsl = hexToHsl(brandColor);
+  var h=_brandHsl[0], s=_brandHsl[1];
+  var l = total<=1 ? 47 : Math.round(35 + (i / (total-1)) * 27);
+  return 'hsl('+h+','+s+'%,'+l+'%)';
 }
 
 // Tooltip element
@@ -78,44 +93,60 @@ tip.style.cssText = 'position:absolute;background:rgba(15,23,42,0.85);color:#fff
 document.getElementById('collections-map').appendChild(tip);
 
 map.on('load', function() {
-  var colCount = (colData || []).filter(function(c) { return c.bbox && c.bbox.length >= 4; }).length;
-  var colIdx = 0;
-  (colData || []).forEach(function(c, i) {
-    if (!c.bbox || c.bbox.length < 4) return;
-    var b = c.bbox;
-    var colour = colourForIndex(colIdx++, colCount);
-    var srcId = 'col-' + i;
-    map.addSource(srcId, {type: 'geojson', data: {type: 'Feature', id: i,
-      geometry: {type: 'Polygon', coordinates: [[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]],[b[0],b[1]]]]},
-      properties: {id: c.id, title: c.title}}});
-    map.addLayer({id: srcId + '-fill', type: 'fill', source: srcId,
-      paint: {'fill-color': colour, 'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.35, 0.12]}});
-    map.addLayer({id: srcId + '-line', type: 'line', source: srcId,
-      paint: {'line-color': colour, 'line-width': 2}});
+  // Collections whose bbox spans most of the globe are useless to draw as a
+  // rectangle (they'd tile the basemap) and shouldn't drive the fit extent.
+  function isGlobal(b) { return (b[2]-b[0]) > 300 || (b[3]-b[1]) > 150; }
 
-    map.on('mousemove', srcId + '-fill', function(e) {
-      map.setFeatureState({source: srcId, id: i}, {hover: true});
+  // Sort largest non-global bbox first (bottom layer); smallest on top (clickable).
+  var ordered = (colData || [])
+    .map(function(c, i) { return {c:c, origIdx:i}; })
+    .filter(function(x) { return x.c.bbox && x.c.bbox.length >= 4 && !isGlobal(x.c.bbox); })
+    .sort(function(a, b) {
+      var aA=(a.c.bbox[2]-a.c.bbox[0])*(a.c.bbox[3]-a.c.bbox[1]);
+      var bA=(b.c.bbox[2]-b.c.bbox[0])*(b.c.bbox[3]-b.c.bbox[1]);
+      return bA-aA;
+    });
+  var colCount = ordered.length;
+
+  ordered.forEach(function(x, colIdx) {
+    var c=x.c, i=x.origIdx, b=c.bbox;
+    var colour = colourForIndex(colIdx, colCount);
+    var srcId = 'col-' + i;
+    map.addSource(srcId, {type:'geojson', data:{type:'Feature', id:i,
+      geometry:{type:'Polygon', coordinates:[[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]],[b[0],b[1]]]]},
+      properties:{id:c.id, title:c.title}}});
+    map.addLayer({id:srcId+'-fill', type:'fill', source:srcId,
+      paint:{'fill-color':colour, 'fill-opacity':['case',['boolean',['feature-state','hover'],false],0.35,0.12]}});
+    map.addLayer({id:srcId+'-line', type:'line', source:srcId,
+      paint:{'line-color':colour, 'line-width':2}});
+
+    map.on('mousemove', srcId+'-fill', function(e) {
+      map.setFeatureState({source:srcId, id:i}, {hover:true});
       map.getCanvas().style.cursor = 'pointer';
       tip.textContent = c.title;
       tip.style.display = 'block';
-      tip.style.left = (e.point.x + 12) + 'px';
-      tip.style.top = (e.point.y - 8) + 'px';
+      tip.style.left = (e.point.x+12)+'px';
+      tip.style.top  = (e.point.y-8)+'px';
     });
-    map.on('mouseleave', srcId + '-fill', function() {
-      map.setFeatureState({source: srcId, id: i}, {hover: false});
+    map.on('mouseleave', srcId+'-fill', function() {
+      map.setFeatureState({source:srcId, id:i}, {hover:false});
       map.getCanvas().style.cursor = '';
       tip.style.display = 'none';
     });
-    map.on('mousemove', srcId + '-fill', function(e) {
-      tip.style.left = (e.point.x + 12) + 'px';
-      tip.style.top = (e.point.y - 8) + 'px';
-    });
-    map.on('click', srcId + '-fill', function() {
-      window.location.href = baseURL + '/collections/' + c.id + '/items';
+    map.on('click', srcId+'-fill', function() {
+      window.location.href = baseURL+'/collections/'+c.id+'/items';
     });
   });
 
-  map.fitBounds([[mergedBbox[0], mergedBbox[1]], [mergedBbox[2], mergedBbox[3]]], {padding: 40, maxZoom: 14});
+  // Fit to non-global collections; if everything is global stay at world view.
+  if (ordered.length > 0) {
+    var fw=Infinity, fs=Infinity, fe=-Infinity, fn=-Infinity;
+    ordered.forEach(function(x) {
+      var b=x.c.bbox;
+      if(b[0]<fw)fw=b[0]; if(b[1]<fs)fs=b[1]; if(b[2]>fe)fe=b[2]; if(b[3]>fn)fn=b[3];
+    });
+    map.fitBounds([[fw,fs],[fe,fn]], {padding:40, maxZoom:14});
+  }
 });
 </script>
 {{end}}
