@@ -9,6 +9,7 @@
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Feature {{.FeatureID}}</span>
       <div class="d-flex gap-2">
+        <a href="{{.BaseURL}}/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json btn-sm">JSON</a>
         {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json btn-sm">← Prev</a>{{end}}
         {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary btn-sm">Next →</a>{{end}}
       </div>
@@ -24,13 +25,20 @@
           {{end}}
         </tbody>
       </table>
-      <h3 class="mt-4">Geometry (GeoJSON)</h3>
-      <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
+      <div class="d-flex align-items-center gap-2 mt-4 mb-2">
+        <h3 class="mb-0" style="cursor:pointer;user-select:none" onclick="toggleGeoJSON()" id="geojson-heading">
+          <span id="geojson-arrow" style="font-size:0.85em;display:inline-block;transition:transform 0.2s;transform:rotate(0deg)">▶</span>
+          Geometry (GeoJSON)
+        </h3>
+        <button id="geojson-copy" class="btn btn-json btn-sm" style="display:none" onclick="copyGeoJSON()">Copy</button>
+      </div>
+      <div id="geojson-block" style="display:none">
+        <pre id="geojson-pre" class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto;max-height:400px;overflow-y:auto">{{.FeatureJSON}}</pre>
+      </div>
       <div class="d-flex gap-2 mt-3">
         <a href="/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
         {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Prev</a>{{end}}
         {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
-        <a href="/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
       </div>
     </div>
   </div>
@@ -76,6 +84,24 @@ if (feature && feature.geometry) {
       map.fitBounds([[Math.min.apply(null,lngs),Math.min.apply(null,lats)],[Math.max.apply(null,lngs),Math.max.apply(null,lats)]],
                     {padding: 60, maxZoom: 14, animate: false});
     }
+  });
+}
+
+function toggleGeoJSON() {
+  var block = document.getElementById('geojson-block');
+  var arrow = document.getElementById('geojson-arrow');
+  var copy  = document.getElementById('geojson-copy');
+  var open  = block.style.display === 'none';
+  block.style.display = open ? '' : 'none';
+  arrow.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+  copy.style.display = open ? '' : 'none';
+}
+function copyGeoJSON() {
+  var text = document.getElementById('geojson-pre').textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.getElementById('geojson-copy');
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
   });
 }
 </script>
