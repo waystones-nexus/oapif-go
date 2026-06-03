@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -82,14 +84,34 @@ func coerceValue(typ, s string) (interface{}, error) {
 
 type Handler struct {
 	cfg         *config.Config
-	store       *db.Store
+	store       *db.Store     // nil until SetDB is called
+	dbReady     chan struct{} // closed by SetDB when store is set and DuckDB is ready
 	startTime   time.Time
 	ttfbOnce    sync.Once
 	openapiJSON []byte
 	tmpls       *template.Template
 }
 
-func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handler {
+// SetDB sets the DuckDB store and signals readiness to all waiting handlers.
+// Must be called exactly once, after DuckDB init and warmup are complete.
+func (h *Handler) SetDB(store *db.Store) {
+	h.store = store // happens-before close(h.dbReady) per Go memory model
+	close(h.dbReady)
+}
+
+// waitForDB blocks until DuckDB is ready or the context/timeout expires.
+func (h *Handler) waitForDB(ctx context.Context) error {
+	select {
+	case <-h.dbReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return errors.New("DuckDB not ready within timeout")
+	}
+}
+
+func NewHandler(cfg *config.Config, dbReady chan struct{}, startTime time.Time) *Handler {
 	spec, err := buildOpenAPI(cfg)
 	if err != nil {
 		panic("buildOpenAPI: " + err.Error())
@@ -138,7 +160,7 @@ func NewHandler(cfg *config.Config, store *db.Store, startTime time.Time) *Handl
 	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{
 		cfg:         cfg,
-		store:       store,
+		dbReady:     dbReady,
 		startTime:   startTime,
 		openapiJSON: spec,
 		tmpls:       tmpls,
@@ -322,6 +344,16 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
+	if err := h.waitForDB(r.Context()); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "Service Unavailable",
+			"https://www.rfc-editor.org/rfc/rfc9110#section-15.6.4",
+			"Server is warming up, please retry shortly")
+		return
+	}
+
 	h.ttfbOnce.Do(func() {
 		log.Printf("[ttfb] %dms - first /items request received after startup", time.Since(h.startTime).Milliseconds())
 	})
@@ -510,6 +542,16 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
+	if err := h.waitForDB(r.Context()); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "Service Unavailable",
+			"https://www.rfc-editor.org/rfc/rfc9110#section-15.6.4",
+			"Server is warming up, please retry shortly")
+		return
+	}
+
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
 		NotFound(w, fmt.Sprintf("Collection '%s' does not exist", r.PathValue("collectionId")))

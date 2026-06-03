@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/waystones/oapif-go/internal/api"
 	"github.com/waystones/oapif-go/internal/config"
 	"github.com/waystones/oapif-go/internal/db"
 )
-
 
 // startTime is set at package init so it captures process start as early as possible.
 var startTime = time.Now()
@@ -25,32 +26,29 @@ func main() {
 
 	ctx := context.Background()
 
-	store, err := db.Open(ctx)
-	if err != nil {
-		log.Fatalf("[startup] open duckdb: %v", err)
-	}
-	defer store.Close()
-	logStartup("DuckDB opened, extensions loaded")
+	// Init S3 client (fast — no DuckDB required).
+	s3c := db.NewS3Client(cfg)
 
-	if err := store.ConfigureS3(ctx, cfg); err != nil {
-		log.Fatalf("[startup] configure R2: %v", err)
-	}
-	logStartup("R2 credentials configured")
-
+	// Load sidecars from R2 via S3 SDK — no DuckDB needed.
+	// Collections without a sidecar are detected later, after DuckDB is ready.
+	needsDetection := make([]bool, len(cfg.Collections))
 	for i := range cfg.Collections {
 		c := &cfg.Collections[i]
-		tCol := time.Now()
-		initCollection(ctx, cfg, store, c)
-		log.Printf("[startup] %dms - %s: ready (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
+		sidecar, err := db.TryLoadSidecar(ctx, s3c, cfg.S3Bucket, c.ParquetKey)
+		if err != nil {
+			log.Printf("[init] warn: sidecar for %s: %v", c.ID, err)
+		}
+		if sidecar != nil && sidecar.Version == 1 {
+			db.ApplySidecar(c, sidecar)
+		} else {
+			needsDetection[i] = true
+		}
 	}
-	logStartup("extents and queryables cached")
+	logStartup("sidecars loaded from R2")
 
-	if err := store.Warmup(ctx, cfg.Collections, cfg.S3Bucket); err != nil {
-		log.Printf("[startup] warn: warmup: %v", err)
-	}
-	logStartup("warmup queries complete")
-
-	h := api.NewHandler(cfg, store, startTime)
+	// Create dbReady channel and handler before binding the port.
+	dbReady := make(chan struct{})
+	h := api.NewHandler(cfg, dbReady, startTime)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.LandingPage)
 	mux.HandleFunc("GET /conformance", h.Conformance)
@@ -62,12 +60,61 @@ func main() {
 	mux.HandleFunc("GET /api", h.OpenAPI)
 	mux.HandleFunc("GET /api.html", h.OpenAPIHTML)
 
+	// Bind port before DuckDB starts so health checks succeed immediately.
 	addr := ":" + cfg.Port
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", addr, err)
+	}
 	logStartup("HTTP server listening on %s", addr)
 
-	if err := http.ListenAndServe(addr, lazyInitMiddleware(cfg, store, mux)); err != nil {
-		log.Fatalf("server: %v", err)
+	// Serve HTTP in goroutine; DuckDB init runs below in main goroutine.
+	go func() {
+		if err := http.Serve(ln, lazyInitMiddleware(cfg, s3c, mux)); err != nil {
+			log.Fatalf("server: %v", err)
+		}
+	}()
+
+	// Init DuckDB + extensions + S3 credentials in main goroutine.
+	store, err := db.Open(ctx)
+	if err != nil {
+		log.Fatalf("[startup] open duckdb: %v", err)
 	}
+	defer store.Close()
+
+	if err := store.ConfigureS3(ctx, cfg); err != nil {
+		log.Fatalf("[startup] configure R2: %v", err)
+	}
+
+	// Detect schema for collections that had no sidecar.
+	for i := range cfg.Collections {
+		if !needsDetection[i] {
+			continue
+		}
+		c := &cfg.Collections[i]
+		tCol := time.Now()
+		if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
+			log.Printf("[init] warn: detect columns for %s: %v", c.ID, err)
+		}
+		if err := store.CacheExtent(ctx, c, cfg.S3Bucket); err != nil {
+			log.Printf("[init] warn: extent for %s: %v", c.ID, err)
+		}
+		if err := store.CacheQueryables(ctx, c, cfg.S3Bucket); err != nil {
+			log.Printf("[init] warn: queryables for %s: %v", c.ID, err)
+		}
+		log.Printf("[startup] %dms - %s: ready (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
+	}
+
+	if err := store.Warmup(ctx, cfg.Collections, cfg.S3Bucket); err != nil {
+		log.Printf("[startup] warn: warmup: %v", err)
+	}
+
+	// Signal readiness: h.store is set then dbReady is closed.
+	h.SetDB(store)
+	logStartup("DuckDB ready (extensions loaded, warmup complete)")
+
+	// Block main so defer store.Close() fires on signal/panic.
+	select {}
 }
 
 func logStartup(format string, args ...interface{}) {
@@ -75,33 +122,11 @@ func logStartup(format string, args ...interface{}) {
 	log.Printf("[startup] %dms - %s", time.Since(startTime).Milliseconds(), msg)
 }
 
-// initCollection runs the per-collection startup sequence: try sidecar first,
-// fall back to full parquet scan if the sidecar is absent or stale.
-func initCollection(ctx context.Context, cfg *config.Config, store *db.Store, c *config.CollectionConfig) {
-	sidecar, err := store.TryLoadSidecar(ctx, c.ParquetKey, cfg.S3Bucket)
-	if err != nil {
-		log.Printf("[init] warn: sidecar for %s: %v", c.ID, err)
-	}
-	if sidecar != nil && sidecar.Version == 1 {
-		db.ApplySidecar(c, sidecar)
-		return
-	}
-	if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
-		log.Printf("[init] warn: detect columns for %s: %v", c.ID, err)
-	}
-	if err := store.CacheExtent(ctx, c, cfg.S3Bucket); err != nil {
-		log.Printf("[init] warn: extent for %s: %v", c.ID, err)
-	}
-	if err := store.CacheQueryables(ctx, c, cfg.S3Bucket); err != nil {
-		log.Printf("[init] warn: queryables for %s: %v", c.ID, err)
-	}
-}
-
 // lazyInitMiddleware reads X-Waystones-OapifGo-B64 on the first request when
-// the server started with 0 collections. This is the fallback path when
-// COLLECTION_CONFIG_B64 was silently dropped by Cloudflare Containers due to
-// the 5 KB total env var limit on large configs with many collections.
-func lazyInitMiddleware(cfg *config.Config, store *db.Store, next http.Handler) http.Handler {
+// the server started with 0 collections. Sidecars are loaded via the S3 client
+// directly (no DuckDB required). Collections without a sidecar will work with
+// config defaults; extent/queryables won't be cached in this path.
+func lazyInitMiddleware(cfg *config.Config, s3c *s3.Client, next http.Handler) http.Handler {
 	var (
 		mu   sync.Mutex
 		done bool
@@ -116,7 +141,14 @@ func lazyInitMiddleware(cfg *config.Config, store *db.Store, next http.Handler) 
 					} else {
 						ctx := r.Context()
 						for i := range cfg.Collections {
-							initCollection(ctx, cfg, store, &cfg.Collections[i])
+							c := &cfg.Collections[i]
+							sidecar, err := db.TryLoadSidecar(ctx, s3c, cfg.S3Bucket, c.ParquetKey)
+							if err != nil {
+								log.Printf("[lazy-init] warn: sidecar for %s: %v", c.ID, err)
+							}
+							if sidecar != nil && sidecar.Version == 1 {
+								db.ApplySidecar(c, sidecar)
+							}
 						}
 						done = len(cfg.Collections) > 0
 						log.Printf("[lazy-init] configured %d collection(s) from X-Waystones-OapifGo-B64", len(cfg.Collections))

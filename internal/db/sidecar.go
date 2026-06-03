@@ -4,27 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/waystones/oapif-go/internal/config"
 )
 
-// TryLoadSidecar tries to fetch {parquetKey}.meta.json from S3 via DuckDB httpfs.
+// TryLoadSidecar fetches {parquetKey}.meta.json from S3 using the AWS SDK.
 //
 //   - (sidecar, nil) — file found and parsed successfully
 //   - (nil, nil)     — file not found or inaccessible (normal on first deploy)
 //   - (nil, err)     — file found but JSON is malformed
-func (s *Store) TryLoadSidecar(ctx context.Context, parquetKey, bucket string) (*config.MetaSidecar, error) {
-	sidecarURL := fmt.Sprintf("s3://%s/%s.meta.json", bucket, parquetKey)
-	var content string
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT content FROM read_text('%s')", sidecarURL),
-	).Scan(&content); err != nil {
-		// File not found, permission denied, or any S3 error — treat as absent.
+func TryLoadSidecar(ctx context.Context, s3c *s3.Client, bucket, parquetKey string) (*config.MetaSidecar, error) {
+	resp, err := s3c.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(parquetKey + ".meta.json"),
+	})
+	if err != nil {
+		// Not found, access denied, or any other S3 error — treat as absent.
 		return nil, nil
 	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil
+	}
+
 	var sc config.MetaSidecar
-	if err := json.Unmarshal([]byte(content), &sc); err != nil {
+	if err := json.Unmarshal(data, &sc); err != nil {
 		return nil, fmt.Errorf("parse sidecar for %s: %w", parquetKey, err)
 	}
 	return &sc, nil
