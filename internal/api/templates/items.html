@@ -245,11 +245,11 @@ document.addEventListener('click',function(e){
 map.on('load', function() {
   map.addSource('features',{type:'geojson',data:toFC(features)});
 
-  // fill/line/circle layers work without explicit geometry-type filters:
-  // MapLibre fill layers only render Polygon/MultiPolygon; line layers only render
-  // LineString/MultiLineString/Polygon; circle layers render for all types so we
-  // keep a filter there to avoid circles appearing on polygon/line features.
+  // fill layers DO render lines as closed shapes (connecting endpoints), so
+  // keep the polygon filter on fill only. Line layers natively skip Point features,
+  // so no filter needed there. Circle keeps a Point filter to avoid circles on all features.
   map.addLayer({id:'feat-fill',type:'fill',source:'features',
+    filter:['in','$type','Polygon'],
     paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.65,['boolean',['feature-state','hover'],false],0.45,0.2]}});
   map.addLayer({id:'feat-fill-selected',type:'line',source:'features',
     filter:['in','$type','Polygon'],
