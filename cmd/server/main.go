@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/waystones/oapif-go/internal/api"
@@ -39,28 +40,8 @@ func main() {
 	for i := range cfg.Collections {
 		c := &cfg.Collections[i]
 		tCol := time.Now()
-
-		sidecar, err := store.TryLoadSidecar(ctx, c.ParquetKey, cfg.S3Bucket)
-		if err != nil {
-			log.Printf("[startup] warn: sidecar for %s: %v", c.ID, err)
-		}
-		if sidecar != nil && sidecar.Version == 1 {
-			db.ApplySidecar(c, sidecar)
-			log.Printf("[startup] %dms - %s: loaded from sidecar (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
-			continue
-		}
-
-		log.Printf("[startup] %s: sidecar not found, computing from parquet", c.ID)
-		if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
-			log.Printf("[startup] warn: detect columns for %s: %v", c.ID, err)
-		}
-		if err := store.CacheExtent(ctx, c, cfg.S3Bucket); err != nil {
-			log.Printf("[startup] warn: extent for %s: %v", c.ID, err)
-		}
-		if err := store.CacheQueryables(ctx, c, cfg.S3Bucket); err != nil {
-			log.Printf("[startup] warn: queryables for %s: %v", c.ID, err)
-		}
-		log.Printf("[startup] %dms - %s: computed from parquet (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
+		initCollection(ctx, cfg, store, c)
+		log.Printf("[startup] %dms - %s: ready (%dms)", time.Since(startTime).Milliseconds(), c.ID, time.Since(tCol).Milliseconds())
 	}
 	logStartup("extents and queryables cached")
 
@@ -84,7 +65,7 @@ func main() {
 	addr := ":" + cfg.Port
 	logStartup("HTTP server listening on %s", addr)
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, lazyInitMiddleware(cfg, store, mux)); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }
@@ -92,4 +73,58 @@ func main() {
 func logStartup(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[startup] %dms - %s", time.Since(startTime).Milliseconds(), msg)
+}
+
+// initCollection runs the per-collection startup sequence: try sidecar first,
+// fall back to full parquet scan if the sidecar is absent or stale.
+func initCollection(ctx context.Context, cfg *config.Config, store *db.Store, c *config.CollectionConfig) {
+	sidecar, err := store.TryLoadSidecar(ctx, c.ParquetKey, cfg.S3Bucket)
+	if err != nil {
+		log.Printf("[init] warn: sidecar for %s: %v", c.ID, err)
+	}
+	if sidecar != nil && sidecar.Version == 1 {
+		db.ApplySidecar(c, sidecar)
+		return
+	}
+	if err := store.DetectColumns(ctx, c, cfg.S3Bucket); err != nil {
+		log.Printf("[init] warn: detect columns for %s: %v", c.ID, err)
+	}
+	if err := store.CacheExtent(ctx, c, cfg.S3Bucket); err != nil {
+		log.Printf("[init] warn: extent for %s: %v", c.ID, err)
+	}
+	if err := store.CacheQueryables(ctx, c, cfg.S3Bucket); err != nil {
+		log.Printf("[init] warn: queryables for %s: %v", c.ID, err)
+	}
+}
+
+// lazyInitMiddleware reads X-Waystones-OapifGo-B64 on the first request when
+// the server started with 0 collections. This is the fallback path when
+// COLLECTION_CONFIG_B64 was silently dropped by Cloudflare Containers due to
+// the 5 KB total env var limit on large configs with many collections.
+func lazyInitMiddleware(cfg *config.Config, store *db.Store, next http.Handler) http.Handler {
+	var (
+		mu   sync.Mutex
+		done bool
+	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !done && len(cfg.Collections) == 0 {
+			if hdr := r.Header.Get("X-Waystones-OapifGo-B64"); hdr != "" {
+				mu.Lock()
+				if !done {
+					if err := config.ApplyB64(cfg, hdr); err != nil {
+						log.Printf("[lazy-init] failed to apply header config: %v", err)
+					} else {
+						ctx := r.Context()
+						for i := range cfg.Collections {
+							initCollection(ctx, cfg, store, &cfg.Collections[i])
+						}
+						done = len(cfg.Collections) > 0
+						log.Printf("[lazy-init] configured %d collection(s) from X-Waystones-OapifGo-B64", len(cfg.Collections))
+					}
+				}
+				mu.Unlock()
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

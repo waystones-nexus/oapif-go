@@ -393,6 +393,38 @@ func Load() *Config {
 	return cfg
 }
 
+// ApplyB64 decodes a base64-encoded config.json and merges its collections and
+// metadata into cfg. Used by the lazy-init header fallback when COLLECTION_CONFIG_B64
+// was too large for the Cloudflare Containers 5 KB env var limit and the proxy
+// delivers the full config via X-Waystones-OapifGo-B64 instead.
+func ApplyB64(cfg *Config, b64 string) error {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return fmt.Errorf("base64: %w", err)
+	}
+	var jc jsonFileConfig
+	if err := json.Unmarshal(data, &jc); err != nil {
+		return fmt.Errorf("json: %w", err)
+	}
+	applyJSONMeta(cfg, &jc)
+	for i := range cfg.Collections {
+		c := &cfg.Collections[i]
+		if c.GeomColumn == "" {
+			c.GeomColumn = "geometry"
+		}
+		if c.IDColumn == "" {
+			c.IDColumn = "fid"
+		}
+		if c.CRS == "" {
+			c.CRS = "CRS84"
+		}
+		for j, crs := range c.SupportedCRS {
+			c.SupportedCRS[j] = normalizeOGCCRS(crs)
+		}
+	}
+	return nil
+}
+
 func (c *Config) CollectionByID(id string) *CollectionConfig {
 	for i := range c.Collections {
 		if c.Collections[i].ID == id {
