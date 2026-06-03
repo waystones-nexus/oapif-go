@@ -3,7 +3,7 @@
 
 <main class="container">
   <div class="row mt-4">
-    <div class="col-lg-8">
+    <div class="{{if or .Provider .License .Keywords .ContactEmail .ContactName}}col-lg-8{{else}}col-12{{end}}">
       <h1 class="mb-3">{{.Title}}</h1>
       {{if .Description}}<p class="lead mb-4" style="color:#334155;font-size:1rem;line-height:1.7">{{.Description}}</p>{{end}}
 

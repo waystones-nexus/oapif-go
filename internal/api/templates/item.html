@@ -5,36 +5,32 @@
   <div class="breadcrumb mb-1">
     <a href="{{.BaseURL}}">Home</a> / <a href="{{.BaseURL}}/collections">Collections</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}">{{.ColID}}</a> / <a href="{{.BaseURL}}/collections/{{.ColID}}/items">Items</a> / {{.FeatureID}}
   </div>
-  <div class="row">
-    <div class="col-lg-8">
-      <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <span>Feature {{.FeatureID}}</span>
-          <div class="d-flex gap-2">
-            {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json btn-sm">← Prev</a>{{end}}
-            {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary btn-sm">Next →</a>{{end}}
-          </div>
-        </div>
-        <div class="card-body">
-          <div id="map" class="mb-4" style="height:320px"></div>
-          <h3>Properties</h3>
-          <table class="table table-hover">
-            <thead><tr><th>Property</th><th>Value</th></tr></thead>
-            <tbody>
-              {{range $k, $v := .Feature.Properties}}
-              {{if not (skipProp $k)}}<tr><td class="fw-semibold">{{$k}}</td><td>{{$v}}</td></tr>{{end}}
-              {{end}}
-            </tbody>
-          </table>
-          <h3 class="mt-4">Geometry (GeoJSON)</h3>
-          <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
-          <div class="d-flex gap-2 mt-3">
-            <a href="/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
-            {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Prev</a>{{end}}
-            {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
-            <a href="/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
-          </div>
-        </div>
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Feature {{.FeatureID}}</span>
+      <div class="d-flex gap-2">
+        {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json btn-sm">← Prev</a>{{end}}
+        {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary btn-sm">Next →</a>{{end}}
+      </div>
+    </div>
+    <div class="card-body">
+      <div id="map" class="mb-4" style="height:380px"></div>
+      <h3>Properties</h3>
+      <table class="table table-hover">
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          {{range $k, $v := .Feature.Properties}}
+          {{if not (skipProp $k)}}<tr><td class="fw-semibold" style="width:30%;white-space:nowrap">{{$k}}</td><td>{{$v}}</td></tr>{{end}}
+          {{end}}
+        </tbody>
+      </table>
+      <h3 class="mt-4">Geometry (GeoJSON)</h3>
+      <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
+      <div class="d-flex gap-2 mt-3">
+        <a href="/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
+        {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Prev</a>{{end}}
+        {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
+        <a href="/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
       </div>
     </div>
   </div>

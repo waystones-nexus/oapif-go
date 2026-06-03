@@ -84,12 +84,37 @@
 
 {{template "footer" .}}
 {{template "scripts-base" .}}
+<style>
+#tbody tr.row-selected td { background: var(--brand-light) !important; box-shadow: inset 3px 0 0 var(--brand); }
+#tbody tr[data-idx] { cursor: pointer; }
+</style>
 <script>
 var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
 var features = {{.FeaturesJSON}};
 if (!features) features = [];
 var colID = '{{.ColID}}';
 var hoveredId = null, featureBounds = null;
+
+var selectedId = null;
+function setSelectedFeature(idx) {
+  if (selectedId !== null) {
+    try { map.setFeatureState({source:'features',id:selectedId},{selected:false}); } catch(e) {}
+  }
+  selectedId = idx;
+  if (idx !== null) {
+    try { map.setFeatureState({source:'features',id:idx},{selected:true}); } catch(e) {}
+  }
+  // Table row highlight
+  var prev = document.querySelector('#tbody tr.row-selected');
+  if (prev) prev.classList.remove('row-selected');
+  if (idx !== null) {
+    var row = document.querySelector('#tbody tr[data-idx="'+idx+'"]');
+    if (row) {
+      row.classList.add('row-selected');
+      row.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
+  }
+}
 
 var map = new maplibregl.Map({
   container: 'map',
@@ -154,7 +179,7 @@ function renderTable(feats) {
     if(prevId!==null)qp.push('prev='+prevId);
     if(nextId!==null)qp.push('next='+nextId);
     if(qp.length)itemPath+='?'+qp.join('&');
-    return'<tr><td><a href="'+itemPath+'">'+id+'</a></td>'+cells+'</tr>';
+    return'<tr data-idx="'+i+'"><td><a href="'+itemPath+'">'+id+'</a></td>'+cells+'</tr>';
   }).join('');
 }
 
@@ -222,21 +247,24 @@ map.on('load', function() {
   map.addSource('features',{type:'geojson',data:toFC(features)});
   map.addLayer({id:'feat-fill',type:'fill',source:'features',
     filter:['==','$type','Polygon'],
-    paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','hover'],false],0.6,0.35]}});
+    paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','selected'],false],0.65,['boolean',['feature-state','hover'],false],0.45,0.2]}});
+  map.addLayer({id:'feat-fill-selected',type:'line',source:'features',
+    filter:['==','$type','Polygon'],
+    paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],3,0],'line-opacity':1}});
   map.addLayer({id:'feat-line',type:'line',source:'features',
     filter:['in','$type','Polygon','LineString'],
-    paint:{'line-color':brandColor,'line-width':['interpolate',['linear'],['zoom'],4,1.5,10,2.5]}});
+    paint:{'line-color':brandColor,'line-width':['case',['boolean',['feature-state','selected'],false],4,['interpolate',['linear'],['zoom'],4,1.5,10,2.5]]}});
   map.addLayer({id:'feat-circle',type:'circle',source:'features',
     filter:['==','$type','Point'],
-    paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','hover'],false],8,6],
-      'circle-opacity':0.75,'circle-stroke-width':1.5,'circle-stroke-color':'#fff'}});
+    paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','selected'],false],10,['boolean',['feature-state','hover'],false],8,6],
+      'circle-opacity':0.85,'circle-stroke-width':['case',['boolean',['feature-state','selected'],false],2.5,1.5],'circle-stroke-color':'#fff'}});
   map.addSource('centroids',{type:'geojson',data:toCentroids(features)});
   map.addLayer({id:'feat-centroid',type:'circle',source:'centroids',
     paint:{'circle-color':brandColor,
       'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,11,5],
-      'circle-opacity':['interpolate',['linear'],['zoom'],9,0.8,12,0],
+      'circle-opacity':['interpolate',['linear'],['zoom'],7,0.75,9,0],
       'circle-stroke-width':1,'circle-stroke-color':'#fff',
-      'circle-stroke-opacity':['interpolate',['linear'],['zoom'],9,0.8,12,0]}});
+      'circle-stroke-opacity':['interpolate',['linear'],['zoom'],7,0.75,9,0]}});
 
   var bounds=computeBounds(features);
   featureBounds=bounds;
@@ -259,6 +287,15 @@ map.on('load', function() {
   });
 });
 
+// ── Table row click → select feature ─────────────────────────────────────────
+document.getElementById('tbody').addEventListener('click', function(e) {
+  if (e.target.tagName === 'A') return; // let ID links navigate normally
+  var row = e.target.closest('tr[data-idx]');
+  if (!row) return;
+  var f = features[parseInt(row.dataset.idx, 10)];
+  if (f) showPanel(f);
+});
+
 // ── Top scrollbar sync ────────────────────────────────────────────────────────
 var topScroll = document.getElementById('table-scroll-top');
 var mainScroll = document.getElementById('table-scroll-main');
@@ -276,6 +313,7 @@ renderTable(features);
 
 // ── Feature panel ─────────────────────────────────────────────────────────────
 function showPanel(f) {
+  setSelectedFeature(features.indexOf(f));
   var props = f.properties || {};
   var entries = Object.entries(props).filter(function(e) {
     return e[1] !== null && e[1] !== '' && e[1] !== undefined && !e[0].match(/^bbox_/i);
@@ -295,7 +333,7 @@ function showPanel(f) {
     '</tr></thead><tbody>' + (rows || '<tr><td colspan="2" class="text-muted p-3">No properties</td></tr>') + '</tbody>';
   document.getElementById('feat-panel').style.display = '';
 }
-function closePanel() { document.getElementById('feat-panel').style.display = 'none'; }
+function closePanel() { document.getElementById('feat-panel').style.display = 'none'; setSelectedFeature(null); }
 
 // ── Use View button ────────────────────────────────────────────────────────────
 document.getElementById('use-view-btn').onclick = function() {

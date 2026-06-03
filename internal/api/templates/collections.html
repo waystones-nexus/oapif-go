@@ -37,7 +37,7 @@
           {{end}}
           {{if .Keywords}}
           <div class="d-flex flex-wrap gap-1 mt-1">
-            {{range .Keywords}}<span class="brand-chip" style="font-size:0.75rem;padding:0.15rem 0.5rem;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">{{.}}</span>{{end}}
+            {{range .Keywords}}<span style="font-size:0.75rem;padding:0.15rem 0.6rem;border-radius:9999px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;font-weight:600;display:inline-block">{{.}}</span>{{end}}
           </div>
           {{end}}
         </div>
@@ -66,42 +66,53 @@ var map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+// Assign distinct colours per collection so overlapping bboxes are distinguishable.
+function colourForIndex(i, total) {
+  var hue = Math.round((i / Math.max(total, 1)) * 360);
+  return 'hsl(' + hue + ',60%,45%)';
+}
+
+// Tooltip element
+var tip = document.createElement('div');
+tip.style.cssText = 'position:absolute;background:rgba(15,23,42,0.85);color:#fff;padding:4px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;pointer-events:none;display:none;z-index:10;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+document.getElementById('collections-map').appendChild(tip);
+
 map.on('load', function() {
-  var features = [];
+  var colCount = (colData || []).filter(function(c) { return c.bbox && c.bbox.length >= 4; }).length;
+  var colIdx = 0;
   (colData || []).forEach(function(c, i) {
     if (!c.bbox || c.bbox.length < 4) return;
     var b = c.bbox;
-    features.push({
-      type: 'Feature', id: i,
-      geometry: {type: 'Polygon', coordinates: [
-        [[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]],[b[0],b[1]]]
-      ]},
-      properties: {id: c.id, title: c.title}
+    var colour = colourForIndex(colIdx++, colCount);
+    var srcId = 'col-' + i;
+    map.addSource(srcId, {type: 'geojson', data: {type: 'Feature', id: i,
+      geometry: {type: 'Polygon', coordinates: [[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]],[b[0],b[1]]]]},
+      properties: {id: c.id, title: c.title}}});
+    map.addLayer({id: srcId + '-fill', type: 'fill', source: srcId,
+      paint: {'fill-color': colour, 'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.35, 0.12]}});
+    map.addLayer({id: srcId + '-line', type: 'line', source: srcId,
+      paint: {'line-color': colour, 'line-width': 2}});
+
+    map.on('mousemove', srcId + '-fill', function(e) {
+      map.setFeatureState({source: srcId, id: i}, {hover: true});
+      map.getCanvas().style.cursor = 'pointer';
+      tip.textContent = c.title;
+      tip.style.display = 'block';
+      tip.style.left = (e.point.x + 12) + 'px';
+      tip.style.top = (e.point.y - 8) + 'px';
     });
-  });
-
-  map.addSource('collections', {type: 'geojson', data: {type: 'FeatureCollection', features: features}});
-  map.addLayer({id: 'col-fill', type: 'fill', source: 'collections',
-    paint: {'fill-color': brandColor,
-      'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.35, 0.1]}});
-  map.addLayer({id: 'col-line', type: 'line', source: 'collections',
-    paint: {'line-color': brandColor, 'line-width': 2}});
-
-  var hoveredId = null;
-  map.on('mousemove', 'col-fill', function(e) {
-    if (e.features.length > 0) {
-      if (hoveredId !== null) map.setFeatureState({source: 'collections', id: hoveredId}, {hover: false});
-      hoveredId = e.features[0].id;
-      map.setFeatureState({source: 'collections', id: hoveredId}, {hover: true});
-    }
-    map.getCanvas().style.cursor = 'pointer';
-  });
-  map.on('mouseleave', 'col-fill', function() {
-    if (hoveredId !== null) { map.setFeatureState({source: 'collections', id: hoveredId}, {hover: false}); hoveredId = null; }
-    map.getCanvas().style.cursor = '';
-  });
-  map.on('click', 'col-fill', function(e) {
-    window.location.href = baseURL + '/collections/' + e.features[0].properties.id + '/items';
+    map.on('mouseleave', srcId + '-fill', function() {
+      map.setFeatureState({source: srcId, id: i}, {hover: false});
+      map.getCanvas().style.cursor = '';
+      tip.style.display = 'none';
+    });
+    map.on('mousemove', srcId + '-fill', function(e) {
+      tip.style.left = (e.point.x + 12) + 'px';
+      tip.style.top = (e.point.y - 8) + 'px';
+    });
+    map.on('click', srcId + '-fill', function() {
+      window.location.href = baseURL + '/collections/' + c.id + '/items';
+    });
   });
 
   map.fitBounds([[mergedBbox[0], mergedBbox[1]], [mergedBbox[2], mergedBbox[3]]], {padding: 40, maxZoom: 14});
