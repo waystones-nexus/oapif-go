@@ -71,6 +71,7 @@ func PrevLink(baseURL, path string, prevOffset, limit int, params url.Values) Li
 
 func paginationLink(rel, title, baseURL, path string, offset, limit int, params url.Values) Link {
 	q := cloneValues(params)
+	q.Del("f") // format-negotiation hint; must not appear in canonical pagination URLs
 	q.Set("offset", strconv.Itoa(offset))
 	q.Set("limit", strconv.Itoa(limit))
 	return Link{
