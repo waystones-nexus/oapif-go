@@ -135,6 +135,30 @@ func NewHandler(cfg *config.Config, dbReady chan struct{}, startTime time.Time) 
 			lower := strings.ToLower(key)
 			return strings.HasPrefix(lower, "bbox_")
 		},
+		// bboxLabel returns a human-readable extent string. Near-global extents
+		// (width > 300° or height > 150°) are shown as "Global extent" rather
+		// than unhelpful floating-point noise.
+		"bboxLabel": func(bbox [][]float64) string {
+			if len(bbox) == 0 || len(bbox[0]) < 4 {
+				return ""
+			}
+			b := bbox[0]
+			if (b[2]-b[0]) > 300 || (b[3]-b[1]) > 150 {
+				return "Global extent"
+			}
+			format := func(v float64) string {
+				s := fmt.Sprintf("%.4f", v)
+				// trim trailing zeros after decimal point
+				for len(s) > 1 && s[len(s)-1] == '0' {
+					s = s[:len(s)-1]
+				}
+				if s[len(s)-1] == '.' {
+					s = s[:len(s)-1]
+				}
+				return s
+			}
+			return fmt.Sprintf("%s, %s, %s, %s", format(b[0]), format(b[1]), format(b[2]), format(b[3]))
+		},
 		// brandStyle returns a CSS :root override block when a custom brand color is set.
 		// Returns empty HTML when the color matches the default, so the base stylesheet handles it.
 		"brandStyle": func() template.CSS {

@@ -24,17 +24,15 @@
             {{if .GeometryType}}<span class="brand-chip" style="font-size:0.75rem;display:inline-flex;align-items:center;padding:0.15rem 0.5rem">{{geomIcon .GeometryType}}{{.GeometryType}}</span>{{end}}
           </div>
           {{if .Description}}<p class="text-muted mb-2" style="font-size:0.9rem">{{.Description}}</p>{{end}}
-          <div class="d-flex flex-wrap gap-1 mt-1">
-            {{if .Extent}}{{if .Extent.Spatial}}
-            <span class="brand-chip" style="font-size:0.8rem">bbox: {{index (index .Extent.Spatial.Bbox 0) 0}}, {{index (index .Extent.Spatial.Bbox 0) 1}}, {{index (index .Extent.Spatial.Bbox 0) 2}}, {{index (index .Extent.Spatial.Bbox 0) 3}}</span>
-            {{end}}{{end}}
-          </div>
-          {{if .CRS}}
-          <div class="d-flex flex-wrap align-items-center gap-1 mt-1">
+          <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+            {{if .CRS}}
             <span class="text-muted" style="font-size:0.75rem;font-weight:600;letter-spacing:.03em">CRS</span>
             {{range .CRS}}<span class="brand-chip" style="font-size:0.75rem;padding:0.15rem 0.5rem">{{crsLabel .}}</span>{{end}}
+            {{end}}
+            {{if .Extent}}{{if .Extent.Spatial}}{{with bboxLabel .Extent.Spatial.Bbox}}
+            <span class="text-muted" style="font-size:0.75rem">· {{.}}</span>
+            {{end}}{{end}}{{end}}
           </div>
-          {{end}}
           {{if .Keywords}}
           <div class="d-flex flex-wrap gap-1 mt-1">
             {{range .Keywords}}<span style="font-size:0.75rem;padding:0.15rem 0.6rem;border-radius:9999px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;font-weight:600;display:inline-block">{{.}}</span>{{end}}
