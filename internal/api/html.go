@@ -55,6 +55,8 @@ type itemTmplData struct {
 	FeatureID   string
 	Feature     SingleFeatureResponse
 	FeatureJSON template.JS
+	PrevHref    string
+	NextHref    string
 }
 
 type conformanceTmplData struct {

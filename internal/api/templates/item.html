@@ -11,8 +11,8 @@
         <div class="card-header d-flex justify-content-between align-items-center">
           <span>Feature {{.FeatureID}}</span>
           <div class="d-flex gap-2">
-            <a id="prev-item-btn" href="#" class="btn btn-json btn-sm" style="display:none">← Prev</a>
-            <a id="next-item-btn" href="#" class="btn btn-primary btn-sm" style="display:none">Next →</a>
+            {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json btn-sm">← Prev</a>{{end}}
+            {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary btn-sm">Next →</a>{{end}}
           </div>
         </div>
         <div class="card-body">
@@ -29,10 +29,10 @@
           <h3 class="mt-4">Geometry (GeoJSON)</h3>
           <pre class="bg-light p-3 rounded" style="font-size:0.8rem;overflow-x:auto">{{.FeatureJSON}}</pre>
           <div class="d-flex gap-2 mt-3">
-            <a href="{{.BaseURL}}/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
-            <a id="prev-item-btn-bottom" href="#" class="btn btn-json" style="display:none">← Prev</a>
-            <a id="next-item-btn-bottom" href="#" class="btn btn-primary" style="display:none">Next →</a>
-            <a href="{{.BaseURL}}/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
+            <a href="/collections/{{.ColID}}/items" class="btn btn-json">← Items</a>
+            {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Prev</a>{{end}}
+            {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
+            <a href="/collections/{{.ColID}}/items/{{.FeatureID}}?f=json" class="btn btn-json">JSON</a>
           </div>
         </div>
       </div>
@@ -43,25 +43,7 @@
 {{template "footer" .}}
 {{template "scripts-base" .}}
 <script>
-var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || brandColor;
-// Prev/next from URL params passed by items table
-(function() {
-  var params = new URLSearchParams(window.location.search);
-  var prevId = params.get('prev'), nextId = params.get('next');
-  var colID = '{{.ColID}}';
-  if (prevId) {
-    var href = '/collections/'+colID+'/items/'+prevId;
-    ['prev-item-btn','prev-item-btn-bottom'].forEach(function(id) {
-      var el = document.getElementById(id); el.href = href; el.style.display = '';
-    });
-  }
-  if (nextId) {
-    var href = '/collections/'+colID+'/items/'+nextId;
-    ['next-item-btn','next-item-btn-bottom'].forEach(function(id) {
-      var el = document.getElementById(id); el.href = href; el.style.display = '';
-    });
-  }
-})();
+var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
 
 var map = new maplibregl.Map({
   container: 'map',

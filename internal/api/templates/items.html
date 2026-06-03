@@ -8,7 +8,7 @@
   <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <h2 class="mb-0">{{.Col.Title}} — Items</h2>
-      <span class="text-muted small">{{.Total}} features</span>
+      <span class="text-muted small features-count">{{.Total}} features</span>
     </div>
     <div class="d-flex gap-2 align-items-center flex-wrap">
       {{if .Bbox}}<span class="brand-chip">bbox: {{.Bbox}}</span>{{end}}
@@ -60,11 +60,10 @@
   </div>
 
   <div class="d-flex gap-2 mb-3">
-    {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Previous</a>{{end}}
-    {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
+    <a id="prev-btn-top" href="{{.PrevHref}}" class="btn btn-json"{{if not .PrevHref}} style="display:none"{{end}}>← Previous</a>
+    <a id="next-btn-top" href="{{.NextHref}}" class="btn btn-primary"{{if not .NextHref}} style="display:none"{{end}}>Next →</a>
   </div>
 
-  {{if .FeaturesJSON}}
   <div class="card">
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -75,13 +74,10 @@
       </div>
     </div>
   </div>
-  {{else}}
-  <p class="text-muted">No features returned.</p>
-  {{end}}
 
   <div class="d-flex gap-2 mt-3">
-    {{if .PrevHref}}<a href="{{.PrevHref}}" class="btn btn-json">← Previous</a>{{end}}
-    {{if .NextHref}}<a href="{{.NextHref}}" class="btn btn-primary">Next →</a>{{end}}
+    <a id="prev-btn-bot" href="{{.PrevHref}}" class="btn btn-json"{{if not .PrevHref}} style="display:none"{{end}}>← Previous</a>
+    <a id="next-btn-bot" href="{{.NextHref}}" class="btn btn-primary"{{if not .NextHref}} style="display:none"{{end}}>Next →</a>
   </div>
 </main>
 
@@ -89,6 +85,11 @@
 {{template "scripts-base" .}}
 <script>
 var brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#4338ca';
+var features = {{.FeaturesJSON}};
+if (!features) features = [];
+var colID = '{{.ColID}}';
+var hoveredId = null, featureBounds = null;
+
 var map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/positron',
@@ -97,128 +98,167 @@ var map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
 
-var features = {{.FeaturesJSON}};
-var featureBounds = null;
-var hoveredId = null;
-var colID = '{{.ColID}}';
-
-if (features && features.length > 0) {
-  var minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-  function extendBounds(c) {
-    if (typeof c[0] === 'number') {
-      if (c[0] < minLng) minLng = c[0]; if (c[1] < minLat) minLat = c[1];
-      if (c[0] > maxLng) maxLng = c[0]; if (c[1] > maxLat) maxLat = c[1];
-    } else { c.forEach(extendBounds); }
-  }
-  features.forEach(function(f) { if (f.geometry && f.geometry.coordinates) extendBounds(f.geometry.coordinates); });
-  if (isFinite(minLng)) featureBounds = [[minLng, minLat], [maxLng, maxLat]];
-
-  var fc = {type: 'FeatureCollection', features: features.map(function(f, i) {
-    return {type: 'Feature', id: i, geometry: f.geometry, properties: Object.assign({}, f.properties)};
+// ── Data helpers ───────────────────────────────────────────────────────────────
+function computeBounds(feats) {
+  var W=Infinity,S=Infinity,E=-Infinity,N=-Infinity;
+  function ext(c) { if(typeof c[0]==='number'){if(c[0]<W)W=c[0];if(c[1]<S)S=c[1];if(c[0]>E)E=c[0];if(c[1]>N)N=c[1];}else{c.forEach(ext);} }
+  feats.forEach(function(f){if(f.geometry&&f.geometry.coordinates)ext(f.geometry.coordinates);});
+  return isFinite(W) ? [[W,S],[E,N]] : null;
+}
+function toFC(feats) {
+  return {type:'FeatureCollection', features:feats.map(function(f,i){
+    return {type:'Feature',id:i,geometry:f.geometry,properties:Object.assign({},f.properties)};
   })};
-
-  // Centroid points for polygon/linestring features — shown at low zoom where
-  // the actual polygon fills are too small to see.
-  var centroidFeats = [];
-  features.forEach(function(f, i) {
-    if (!f.geometry) return;
-    var t = f.geometry.type;
-    if (t !== 'Polygon' && t !== 'MultiPolygon' && t !== 'LineString' && t !== 'MultiLineString') return;
-    var coords = [];
-    function flatC(c) { if (typeof c[0] === 'number') coords.push(c); else c.forEach(flatC); }
+}
+function toCentroids(feats) {
+  var arr=[];
+  feats.forEach(function(f,i){
+    if(!f.geometry)return;
+    var t=f.geometry.type;
+    if(t!=='Polygon'&&t!=='MultiPolygon'&&t!=='LineString'&&t!=='MultiLineString')return;
+    var coords=[];
+    function flatC(c){if(typeof c[0]==='number')coords.push(c);else c.forEach(flatC);}
     flatC(f.geometry.coordinates);
-    if (!coords.length) return;
-    var lngs = coords.map(function(c) { return c[0]; });
-    var lats = coords.map(function(c) { return c[1]; });
-    centroidFeats.push({type:'Feature', id:i, geometry:{type:'Point', coordinates:[
-      (Math.min.apply(null,lngs) + Math.max.apply(null,lngs)) / 2,
-      (Math.min.apply(null,lats) + Math.max.apply(null,lats)) / 2
-    ]}, properties:{}});
+    if(!coords.length)return;
+    var lngs=coords.map(function(c){return c[0];}),lats=coords.map(function(c){return c[1];});
+    arr.push({type:'Feature',id:i,geometry:{type:'Point',coordinates:[
+      (Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2,
+      (Math.min.apply(null,lats)+Math.max.apply(null,lats))/2
+    ]},properties:{}});
   });
-  var centroidsFC = {type:'FeatureCollection', features: centroidFeats};
+  return {type:'FeatureCollection',features:arr};
+}
+function toRelPath(href) {
+  if(!href)return'';
+  try{var u=new URL(href,window.location.href);return u.pathname+(u.search||'')+'';}catch(e){return href;}
+}
 
-  map.on('load', function() {
-    map.addSource('features', {type: 'geojson', data: fc});
-    map.addLayer({id: 'feat-fill', type: 'fill', source: 'features',
-      filter: ['==', '$type', 'Polygon'],
-      paint: {'fill-color': brandColor,
-        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.6, 0.35]}});
-    map.addLayer({id: 'feat-line', type: 'line', source: 'features',
-      filter: ['in', '$type', 'Polygon', 'LineString'],
-      paint: {'line-color': brandColor,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1.5, 10, 2.5]}});
-    map.addLayer({id: 'feat-circle', type: 'circle', source: 'features',
-      filter: ['==', '$type', 'Point'],
-      paint: {'circle-color': brandColor,
-        'circle-radius': ['case', ['boolean', ['feature-state', 'hover'], false], 8, 6],
-        'circle-opacity': 0.75, 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff'}});
-
-    // Centroid dot layer — visible at low zoom, fades out at zoom ≥ 12 where
-    // the polygon outlines are large enough to read without the dot markers.
-    if (centroidsFC.features.length > 0) {
-      map.addSource('centroids', {type:'geojson', data: centroidsFC});
-      map.addLayer({id:'feat-centroid', type:'circle', source:'centroids',
-        paint:{
-          'circle-color': brandColor,
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 2, 8, 4, 11, 5],
-          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 12, 0],
-          'circle-stroke-width': 1, 'circle-stroke-color': '#fff',
-          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 12, 0]
-        }
-      });
-    }
-
-    if (featureBounds) map.fitBounds(featureBounds, {padding: 40, maxZoom: 14});
-
-    document.getElementById('use-view-btn').style.display = '';
-    document.getElementById('draw-bbox-btn').style.display = '';
-    if (featureBounds) document.getElementById('fit-btn').style.display = '';
-
-    function clearHover() {
-      if (hoveredId !== null) { map.setFeatureState({source: 'features', id: hoveredId}, {hover: false}); hoveredId = null; }
-    }
-    // Centroid click shows the panel (same feature as the underlying polygon)
-    if (centroidsFC.features.length > 0) {
-      map.on('click', 'feat-centroid', function(e) {
-        var origF = features[e.features[0].id];
-        if (origF) showPanel(origF);
-      });
-      map.on('mousemove', 'feat-centroid', function() { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'feat-centroid', function() { if (!drawMode) map.getCanvas().style.cursor = ''; });
-    }
-    ['feat-fill', 'feat-line', 'feat-circle'].forEach(function(lid) {
-      map.on('click', lid, function(e) {
-        var origF = features[e.features[0].id];
-        if (origF) showPanel(origF);
-      });
-      map.on('mousemove', lid, function(e) {
-        if (drawMode) return;
-        if (e.features.length > 0) {
-          clearHover(); hoveredId = e.features[0].id;
-          map.setFeatureState({source: 'features', id: hoveredId}, {hover: true});
-        }
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', lid, function() { if (!drawMode) { clearHover(); map.getCanvas().style.cursor = ''; } });
-    });
-  });
-
-  var props = Object.keys(features[0].properties || {})
-    .filter(function(p) { return !p.match(/^bbox_/i); });
-  document.getElementById('thead-row').innerHTML = '<th>ID</th>' + props.map(function(p){ return '<th>'+p+'</th>'; }).join('');
-  document.getElementById('tbody').innerHTML = features.map(function(f, i) {
-    var cells = props.map(function(p){ var v=f.properties[p]; return '<td>'+(v===null||v===undefined?'':v)+'</td>'; }).join('');
-    var id = f.id !== undefined ? f.id : '';
-    var prevId = i > 0 && features[i-1].id !== undefined ? features[i-1].id : null;
-    var nextId = i < features.length-1 && features[i+1].id !== undefined ? features[i+1].id : null;
-    var itemPath = '/collections/'+colID+'/items/'+id;
-    var qp = [];
-    if (prevId !== null) qp.push('prev='+prevId);
-    if (nextId !== null) qp.push('next='+nextId);
-    if (qp.length) itemPath += '?' + qp.join('&');
-    return '<tr><td><a href="'+itemPath+'">'+id+'</a></td>'+cells+'</tr>';
+// ── Table render ───────────────────────────────────────────────────────────────
+function renderTable(feats) {
+  if(!feats||!feats.length){
+    document.getElementById('thead-row').innerHTML='';
+    document.getElementById('tbody').innerHTML='<tr><td class="text-muted p-3">No features returned.</td></tr>';
+    return;
+  }
+  var props=Object.keys(feats[0].properties||{}).filter(function(p){return!p.match(/^bbox_/i);});
+  document.getElementById('thead-row').innerHTML='<th>ID</th>'+props.map(function(p){return'<th>'+p+'</th>';}).join('');
+  document.getElementById('tbody').innerHTML=feats.map(function(f,i){
+    var cells=props.map(function(p){var v=f.properties[p];return'<td>'+(v===null||v===undefined?'':v)+'</td>';}).join('');
+    var id=f.id!==undefined?f.id:'';
+    var prevId=i>0&&feats[i-1].id!==undefined?feats[i-1].id:null;
+    var nextId=i<feats.length-1&&feats[i+1].id!==undefined?feats[i+1].id:null;
+    var itemPath='/collections/'+colID+'/items/'+id;
+    var qp=[];
+    if(prevId!==null)qp.push('prev='+prevId);
+    if(nextId!==null)qp.push('next='+nextId);
+    if(qp.length)itemPath+='?'+qp.join('&');
+    return'<tr><td><a href="'+itemPath+'">'+id+'</a></td>'+cells+'</tr>';
   }).join('');
 }
+
+// ── Pagination button update ───────────────────────────────────────────────────
+function setPaginationBtn(id, href) {
+  var el=document.getElementById(id);
+  if(!el)return;
+  el.href=href||'#';
+  el.style.display=href?'':'none';
+}
+function updatePagination(prevHref, nextHref) {
+  setPaginationBtn('prev-btn-top',prevHref); setPaginationBtn('prev-btn-bot',prevHref);
+  setPaginationBtn('next-btn-top',nextHref); setPaginationBtn('next-btn-bot',nextHref);
+}
+
+// ── Client-side page load (no map reinit) ──────────────────────────────────────
+function loadPage(newFeatures, newTotal, newPrevHref, newNextHref, newUrl) {
+  features = newFeatures;
+  closePanel();
+  if(hoveredId!==null){
+    try{map.setFeatureState({source:'features',id:hoveredId},{hover:false});}catch(e){}
+    hoveredId=null;
+  }
+  if(map.getSource('features'))map.getSource('features').setData(toFC(newFeatures));
+  if(map.getSource('centroids'))map.getSource('centroids').setData(toCentroids(newFeatures));
+  var bounds=computeBounds(newFeatures);
+  featureBounds=bounds;
+  if(bounds){map.fitBounds(bounds,{padding:40,maxZoom:14});document.getElementById('fit-btn').style.display='';}
+  else{document.getElementById('fit-btn').style.display='none';}
+  renderTable(newFeatures);
+  updatePagination(newPrevHref, newNextHref);
+  var countEl=document.querySelector('.features-count');
+  if(countEl)countEl.textContent=(newTotal||newFeatures.length)+' features';
+  if(newUrl)history.pushState(null,'',newUrl);
+}
+
+function goToPage(href) {
+  var u=new URL(href,window.location.href);
+  u.searchParams.set('f','json');
+  fetch(u.toString())
+    .then(function(r){return r.json();})
+    .then(function(data){
+      var newFeats=data.features||[];
+      var newTotal=data.numberMatched||newFeats.length;
+      var newPrev='',newNext='';
+      (data.links||[]).forEach(function(l){
+        if(l.rel==='next')newNext=toRelPath(l.href);
+        if(l.rel==='prev')newPrev=toRelPath(l.href);
+      });
+      loadPage(newFeats,newTotal,newPrev,newNext,href);
+    })
+    .catch(function(){window.location.href=href;});
+}
+
+// Intercept pagination link clicks
+document.addEventListener('click',function(e){
+  var a=e.target.closest('#prev-btn-top,#next-btn-top,#prev-btn-bot,#next-btn-bot');
+  if(!a||!a.href||a.href==='#')return;
+  e.preventDefault();
+  goToPage(a.href);
+});
+
+// ── Map setup (layers added once; sources updated on each page) ────────────────
+map.on('load', function() {
+  map.addSource('features',{type:'geojson',data:toFC(features)});
+  map.addLayer({id:'feat-fill',type:'fill',source:'features',
+    filter:['==','$type','Polygon'],
+    paint:{'fill-color':brandColor,'fill-opacity':['case',['boolean',['feature-state','hover'],false],0.6,0.35]}});
+  map.addLayer({id:'feat-line',type:'line',source:'features',
+    filter:['in','$type','Polygon','LineString'],
+    paint:{'line-color':brandColor,'line-width':['interpolate',['linear'],['zoom'],4,1.5,10,2.5]}});
+  map.addLayer({id:'feat-circle',type:'circle',source:'features',
+    filter:['==','$type','Point'],
+    paint:{'circle-color':brandColor,'circle-radius':['case',['boolean',['feature-state','hover'],false],8,6],
+      'circle-opacity':0.75,'circle-stroke-width':1.5,'circle-stroke-color':'#fff'}});
+  map.addSource('centroids',{type:'geojson',data:toCentroids(features)});
+  map.addLayer({id:'feat-centroid',type:'circle',source:'centroids',
+    paint:{'circle-color':brandColor,
+      'circle-radius':['interpolate',['linear'],['zoom'],2,2,8,4,11,5],
+      'circle-opacity':['interpolate',['linear'],['zoom'],9,0.8,12,0],
+      'circle-stroke-width':1,'circle-stroke-color':'#fff',
+      'circle-stroke-opacity':['interpolate',['linear'],['zoom'],9,0.8,12,0]}});
+
+  var bounds=computeBounds(features);
+  featureBounds=bounds;
+  if(bounds){map.fitBounds(bounds,{padding:40,maxZoom:14});document.getElementById('fit-btn').style.display='';}
+  document.getElementById('use-view-btn').style.display='';
+  document.getElementById('draw-bbox-btn').style.display='';
+
+  function clearHover(){if(hoveredId!==null){map.setFeatureState({source:'features',id:hoveredId},{hover:false});hoveredId=null;}}
+  map.on('click','feat-centroid',function(e){var f=features[e.features[0].id];if(f)showPanel(f);});
+  map.on('mousemove','feat-centroid',function(){map.getCanvas().style.cursor='pointer';});
+  map.on('mouseleave','feat-centroid',function(){if(!drawMode)map.getCanvas().style.cursor='';});
+  ['feat-fill','feat-line','feat-circle'].forEach(function(lid){
+    map.on('click',lid,function(e){var f=features[e.features[0].id];if(f)showPanel(f);});
+    map.on('mousemove',lid,function(e){
+      if(drawMode)return;
+      if(e.features.length>0){clearHover();hoveredId=e.features[0].id;map.setFeatureState({source:'features',id:hoveredId},{hover:true});}
+      map.getCanvas().style.cursor='pointer';
+    });
+    map.on('mouseleave',lid,function(){if(!drawMode){clearHover();map.getCanvas().style.cursor='';}});
+  });
+});
+
+// Initial table render
+renderTable(features);
 
 // ── Feature panel ─────────────────────────────────────────────────────────────
 function showPanel(f) {

@@ -546,6 +546,17 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 
 	if acceptsHTML(r) {
 		featJSON, _ := json.MarshalIndent(resp, "", "  ")
+		// Find adjacent feature IDs for prev/next navigation.
+		var prevHref, nextHref string
+		if prevID, nextID, adjErr := h.store.QueryAdjacentIDs(r.Context(), col, h.cfg.S3Bucket, featureID); adjErr == nil {
+			colPath := "/collections/" + col.ID + "/items/"
+			if prevID != "" {
+				prevHref = colPath + prevID
+			}
+			if nextID != "" {
+				nextHref = colPath + nextID
+			}
+		}
 		h.renderHTML(w, "item.html", itemTmplData{
 			Title:       h.cfg.ServerTitle,
 			BaseURL:     base,
@@ -553,6 +564,8 @@ func (h *Handler) Item(w http.ResponseWriter, r *http.Request) {
 			FeatureID:   featureID,
 			Feature:     resp,
 			FeatureJSON: template.JS(featJSON),
+			PrevHref:    prevHref,
+			NextHref:    nextHref,
 		})
 		return
 	}

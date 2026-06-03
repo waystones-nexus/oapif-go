@@ -515,6 +515,36 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	return features, total, rows.Err()
 }
 
+// QueryAdjacentIDs returns the IDs of the features immediately before and after
+// featureID in ascending ID order. Either value is empty when at the boundary.
+// Only the ID column is read so this is fast even on large parquet files.
+func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConfig, bucket, featureID string) (prevID, nextID string, err error) {
+	purl := parquetURL(bucket, col.ParquetKey)
+	// LAG/LEAD over the ID column — DuckDB only reads that one column from parquet.
+	query := fmt.Sprintf(`
+		SELECT prev_id, next_id FROM (
+			SELECT
+				CAST(%s AS VARCHAR) AS id,
+				CAST(LAG(%s) OVER (ORDER BY %s) AS VARCHAR) AS prev_id,
+				CAST(LEAD(%s) OVER (ORDER BY %s) AS VARCHAR) AS next_id
+			FROM read_parquet('%s')
+		) WHERE id = '%s'
+		LIMIT 1
+	`, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn,
+		purl, strings.ReplaceAll(featureID, "'", "''"))
+	var prev, next sql.NullString
+	if err := s.db.QueryRowContext(ctx, query).Scan(&prev, &next); err != nil {
+		return "", "", err
+	}
+	if prev.Valid {
+		prevID = prev.String
+	}
+	if next.Valid {
+		nextID = next.String
+	}
+	return prevID, nextID, nil
+}
+
 // QueryItem fetches a single feature by its ID column value.
 // Returns (nil, nil) when the feature is not found.
 // outputCRS is an EPSG code string (e.g. "EPSG:3857") for geometry reprojection; "" = no transform.
