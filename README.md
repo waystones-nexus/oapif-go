@@ -158,7 +158,7 @@ The server supports the OGC API Features core endpoints and query parameters.
 
 | Parameter      | Type     | Description                                                                                                   |
 |----------------|----------|---------------------------------------------------------------------------------------------------------------|
-| `limit`        | Integer  | Number of features to return (min: `1`, max/default: `1000`)                                                  |
+| `limit`        | Integer  | Number of features to return (min: `1`, max: `1000`, default: `10`)                                           |
 | `offset`       | Integer  | Index offset of the first feature to return (default: `0`)                                                   |
 | `bbox`         | String   | `minx,miny,maxx,maxy` spatial filter                                                                          |
 | `bbox-crs`     | String   | CRS URI for the `bbox` parameter (e.g. `http://www.opengis.net/def/crs/OGC/1.3/CRS84`)                        |

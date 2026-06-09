@@ -62,6 +62,9 @@ type CollectionConfig struct {
 	// GeometryType is the simplified geometry type: "polygon", "line", or "point".
 	// Set by DetectColumns from GeoParquet metadata; empty if unknown.
 	GeometryType string
+	// StorageCRS is the OGC URI of the CRS in which geometry coordinates are stored.
+	// Set by DetectColumns from GeoParquet metadata; defaults to CRS84 when empty.
+	StorageCRS string
 	// FeatureCount is the total row count loaded from the sidecar (0 = not cached).
 	// Used by QueryItems to skip the COUNT(*) query on unfiltered requests.
 	FeatureCount int64

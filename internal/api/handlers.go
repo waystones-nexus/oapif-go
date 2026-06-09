@@ -174,6 +174,15 @@ func effectiveCRS(col *config.CollectionConfig) []string {
 	return base
 }
 
+// storageCRS returns the OGC URI for the collection's native storage CRS.
+// Falls back to CRS84 when the field was not populated from GeoParquet metadata.
+func storageCRS(col *config.CollectionConfig) string {
+	if col.StorageCRS != "" {
+		return col.StorageCRS
+	}
+	return crs84URI
+}
+
 // crsURItoEPSG returns the EPSG code string for ST_Transform, or "" if no
 // transform is needed (CRS84 / EPSG:4326 are the storage CRS).
 func crsURItoEPSG(uri string) string {
@@ -210,11 +219,13 @@ func coerceValue(typ, s string) (interface{}, error) {
 
 type Handler struct {
 	cfg         *config.Config
-	store       *db.Store     // nil until SetDB is called
+	store       *db.Store    // nil until SetDB is called
 	dbReady     chan struct{} // closed by SetDB when store is set and DuckDB is ready
 	startTime   time.Time
 	ttfbOnce    sync.Once
+	openapiMu   sync.RWMutex
 	openapiJSON []byte
+	openapiNCols int // number of collections when openapiJSON was last built
 	tmpls       *template.Template
 }
 
@@ -315,11 +326,12 @@ func NewHandler(cfg *config.Config, dbReady chan struct{}, startTime time.Time) 
 	}
 	tmpls := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 	return &Handler{
-		cfg:         cfg,
-		dbReady:     dbReady,
-		startTime:   startTime,
-		openapiJSON: spec,
-		tmpls:       tmpls,
+		cfg:          cfg,
+		dbReady:      dbReady,
+		startTime:    startTime,
+		openapiJSON:  spec,
+		openapiNCols: len(cfg.Collections),
+		tmpls:        tmpls,
 	}
 }
 
@@ -375,7 +387,8 @@ func (h *Handler) LandingPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeJSON(w, http.StatusOK, LandingPage{
-		Title: h.cfg.ServerTitle,
+		Title:       h.cfg.ServerTitle,
+		Description: h.cfg.ServerDescription,
 		Links: []Link{
 			selfLink(base + "/"),
 			ConformanceLink(base),
@@ -408,7 +421,7 @@ func (h *Handler) Conformance(w http.ResponseWriter, r *http.Request) {
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
 		"http://www.opengis.net/spec/cql2/1.0/conf/advanced-comparison-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-operators",
-		"http://www.opengis.net/spec/cql2/1.0/conf/spatial-operators",
+		// spatial-operators (full) is NOT claimed — S_DWITHIN and S_BEYOND are not implemented.
 		"http://www.opengis.net/spec/cql2/1.0/conf/temporal-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
@@ -482,7 +495,10 @@ func (h *Handler) Collections(w http.ResponseWriter, r *http.Request) {
 	}
 	h.writeJSON(w, http.StatusOK, CollectionsResponse{
 		Collections: infos,
-		Links:       []Link{selfLink(base + "/collections")},
+		Links: []Link{
+			selfLink(base + "/collections"),
+			AlternateLink(base+"/collections?f=html", "text/html", "This document as HTML"),
+		},
 	})
 }
 
@@ -510,6 +526,48 @@ func (h *Handler) Collection(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, info)
 }
 
+// GlobalQueryables serves GET /queryables — the union of queryable properties
+// across all collections, as required by OGC API Features Part 3 conf/filter §7.
+func (h *Handler) GlobalQueryables(w http.ResponseWriter, r *http.Request) {
+	t := h.latestGeneratedAt()
+	setStaticCacheHeaders(w, t)
+	if checkNotModified(w, r, staticETag(t), t) {
+		return
+	}
+
+	props := make(map[string]QueryablePropertySchema)
+	for i := range h.cfg.Collections {
+		col := &h.cfg.Collections[i]
+		for name, field := range col.Queryables {
+			if _, exists := props[name]; !exists {
+				props[name] = QueryablePropertySchema{
+					Type:        field.Type,
+					Format:      field.Format,
+					Title:       field.Title,
+					Description: field.Description,
+					Enum:        field.Enum,
+				}
+			}
+		}
+	}
+
+	base := h.cfg.ServerURL
+	if acceptsHTML(r) {
+		h.renderHTML(w, "queryables.html", queryablesTmplData{
+			Title: h.cfg.ServerTitle, BaseURL: base,
+			ColID: "", ColTitle: "Global", Properties: props,
+		})
+		return
+	}
+	h.writeJSON(w, http.StatusOK, QueryablesResponse{
+		Schema:     "https://json-schema.org/draft/2019-09/schema",
+		ID:         base + "/queryables",
+		Type:       "object",
+		Title:      "Global Queryables",
+		Properties: props,
+	})
+}
+
 func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 	col := h.cfg.CollectionByID(r.PathValue("collectionId"))
 	if col == nil {
@@ -521,7 +579,7 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	props := make(map[string]QueryablePropertySchema, len(col.Queryables))
+	props := make(map[string]QueryablePropertySchema, len(col.Queryables)+1)
 	for name, field := range col.Queryables {
 		props[name] = QueryablePropertySchema{
 			Type:        field.Type,
@@ -529,6 +587,14 @@ func (h *Handler) Queryables(w http.ResponseWriter, r *http.Request) {
 			Title:       field.Title,
 			Description: field.Description,
 			Enum:        field.Enum,
+		}
+	}
+	if col.GeomColumn != "" {
+		props[col.GeomColumn] = QueryablePropertySchema{
+			Type:     "object",
+			Format:   "geometry",
+			XOGCRole: "primary-geometry",
+			Title:    "Geometry",
 		}
 	}
 
@@ -579,7 +645,7 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 		if b, ok := parseBbox(bboxStr); ok {
 			bbox = &b
 		} else {
-			InvalidParameter(w, "bbox", "must be minx,miny,maxx,maxy")
+			InvalidParameter(w, "bbox", "must be minx,miny,maxx,maxy or minx,miny,minz,maxx,maxy,maxz")
 			return
 		}
 	}
@@ -893,9 +959,10 @@ func buildCollectionInfo(col *config.CollectionConfig, base string) CollectionIn
 		},
 		Links: []Link{
 			selfLink(fmt.Sprintf("%s/collections/%s", base, col.ID)),
+			AlternateLink(fmt.Sprintf("%s/collections/%s?f=html", base, col.ID), "text/html", "This document as HTML"),
 			itemsLink(base, col.ID),
 		},
-		StorageCRS: crs84URI,
+		StorageCRS: storageCRS(col),
 		CRS:        effectiveCRS(col),
 	}
 }
@@ -923,18 +990,22 @@ func clampInt(v, min, max int) int {
 
 func parseBbox(s string) ([4]float64, bool) {
 	parts := strings.Split(s, ",")
-	if len(parts) != 4 {
+	if len(parts) != 4 && len(parts) != 6 {
 		return [4]float64{}, false
 	}
-	var b [4]float64
+	var vals [6]float64
 	for i, p := range parts {
 		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
 		if err != nil {
 			return [4]float64{}, false
 		}
-		b[i] = v
+		vals[i] = v
 	}
-	return b, true
+	// For 6-coordinate (3D) bboxes, use only the horizontal axes.
+	if len(parts) == 6 {
+		return [4]float64{vals[0], vals[1], vals[3], vals[4]}, true
+	}
+	return [4]float64{vals[0], vals[1], vals[2], vals[3]}, true
 }
 
 func parseDatetime(s string) (*db.DatetimeFilter, error) {
