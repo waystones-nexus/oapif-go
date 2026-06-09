@@ -54,9 +54,10 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 
 	// Read GeoParquet spec `geo` key-value metadata (parquet file footer, no row scan).
 	type geoColMeta struct {
-		Encoding      string    `json:"encoding"`
-		Bbox          []float64 `json:"bbox"`
-		GeometryTypes []string  `json:"geometry_types"`
+		Encoding      string          `json:"encoding"`
+		Bbox          []float64       `json:"bbox"`
+		GeometryTypes []string        `json:"geometry_types"`
+		Crs           json.RawMessage `json:"crs"` // PROJJSON object or null (null = CRS84)
 	}
 	type geoMeta struct {
 		PrimaryColumn string                `json:"primary_column"`
@@ -205,6 +206,13 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 		}
 	}
 
+	// Detect storage CRS from GeoParquet metadata. Per the spec, absent/null → CRS84.
+	if col.StorageCRS == "" {
+		if cm, ok := geo.Columns[col.GeomColumn]; ok {
+			col.StorageCRS = geoParquetCRSToURI(cm.Crs)
+		}
+	}
+
 	return nil
 }
 
@@ -252,6 +260,32 @@ func simplifyGeomType(t string) string {
 	default:
 		return "polygon"
 	}
+}
+
+// geoParquetCRSToURI converts a GeoParquet PROJJSON `crs` field to an OGC CRS URI.
+// Per the GeoParquet spec, null or absent means WGS84 geographic (CRS84).
+func geoParquetCRSToURI(crsJSON json.RawMessage) string {
+	const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+	if len(crsJSON) == 0 || string(crsJSON) == "null" {
+		return crs84
+	}
+	var proj struct {
+		ID struct {
+			Authority string      `json:"authority"`
+			Code      interface{} `json:"code"` // spec allows int or string
+		} `json:"id"`
+	}
+	if err := json.Unmarshal(crsJSON, &proj); err != nil || proj.ID.Authority == "" {
+		return crs84
+	}
+	if strings.ToUpper(proj.ID.Authority) == "EPSG" {
+		code := fmt.Sprintf("%v", proj.ID.Code)
+		if code == "4326" {
+			return crs84
+		}
+		return "http://www.opengis.net/def/crs/EPSG/0/" + code
+	}
+	return crs84
 }
 
 // geomExpr returns the SQL expression that produces a DuckDB GEOMETRY value from the geometry column.

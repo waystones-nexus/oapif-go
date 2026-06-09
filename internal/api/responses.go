@@ -63,6 +63,7 @@ type LandingPage struct {
 type QueryablePropertySchema struct {
 	Type        string   `json:"type"`
 	Format      string   `json:"format,omitempty"`
+	XOGCRole    string   `json:"x-ogc-role,omitempty"`
 	Title       string   `json:"title,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Enum        []string `json:"enum,omitempty"`

@@ -54,6 +54,7 @@ func main() {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /{$}", h.LandingPage)
 	apiMux.HandleFunc("GET /conformance", h.Conformance)
+	apiMux.HandleFunc("GET /queryables", h.GlobalQueryables)
 	apiMux.HandleFunc("GET /collections", h.Collections)
 	apiMux.HandleFunc("GET /collections/{collectionId}", h.Collection)
 	apiMux.HandleFunc("GET /collections/{collectionId}/queryables", h.Queryables)

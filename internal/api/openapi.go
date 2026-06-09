@@ -26,7 +26,6 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
 		"http://www.opengis.net/spec/cql2/1.0/conf/advanced-comparison-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/basic-spatial-operators",
-		"http://www.opengis.net/spec/cql2/1.0/conf/spatial-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/temporal-operators",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
 		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
@@ -34,7 +33,7 @@ func buildOpenAPI(cfg *config.Config) ([]byte, error) {
 
 	infoDesc := "OGC API Features server.\n\n" +
 		"**Conformance:** Part 1 (core, OAS30, GeoJSON, HTML) · Part 2 (CRS by Reference) · " +
-		"Part 3 (CQL2 filtering — text and JSON encoding, comparison, spatial and temporal predicates).\n\n" +
+		"Part 3 (CQL2 filtering — text and JSON encoding, comparison, basic spatial operators, and temporal predicates).\n\n" +
 		"**Extensions:** sortby for result ordering; properties for column selection."
 
 	var contactBlock map[string]any
@@ -254,6 +253,13 @@ func buildPaths() map[string]any {
 				"responses":  jsonResp("Collection metadata"),
 			},
 		},
+		"/queryables": map[string]any{
+			"get": map[string]any{
+				"summary": "Global queryables", "operationId": "getGlobalQueryables",
+				"parameters": []any{ref("f")},
+				"responses":  jsonResp("Queryable fields across all collections"),
+			},
+		},
 		"/collections/{collectionId}/queryables": map[string]any{
 			"get": map[string]any{
 				"summary": "Queryables", "operationId": "getQueryables",
@@ -278,6 +284,29 @@ func buildPaths() map[string]any {
 	}
 }
 
+func (h *Handler) openAPIBytes() []byte {
+	n := len(h.cfg.Collections)
+
+	h.openapiMu.RLock()
+	if n == h.openapiNCols {
+		b := h.openapiJSON
+		h.openapiMu.RUnlock()
+		return b
+	}
+	h.openapiMu.RUnlock()
+
+	h.openapiMu.Lock()
+	defer h.openapiMu.Unlock()
+	// Re-check after acquiring write lock.
+	if n != h.openapiNCols {
+		if spec, err := buildOpenAPI(h.cfg); err == nil {
+			h.openapiJSON = spec
+			h.openapiNCols = n
+		}
+	}
+	return h.openapiJSON
+}
+
 func (h *Handler) OpenAPI(w http.ResponseWriter, r *http.Request) {
 	t := h.latestGeneratedAt()
 	setStaticCacheHeaders(w, t)
@@ -286,7 +315,7 @@ func (h *Handler) OpenAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.oai.openapi+json;version=3.0")
 	w.WriteHeader(http.StatusOK)
-	w.Write(h.openapiJSON) //nolint:errcheck
+	w.Write(h.openAPIBytes()) //nolint:errcheck
 }
 
 func (h *Handler) OpenAPIHTML(w http.ResponseWriter, r *http.Request) {
