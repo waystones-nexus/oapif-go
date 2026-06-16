@@ -300,14 +300,36 @@ func geomExpr(col *config.CollectionConfig) string {
 	return fmt.Sprintf("ST_GeomFromWKB(%s)", col.GeomColumn)
 }
 
+// storageCRSEPSG returns the EPSG code for the collection's storage CRS (e.g. "EPSG:3857").
+// Defaults to "EPSG:4326" for CRS84 or when the storage CRS is unset.
+func storageCRSEPSG(col *config.CollectionConfig) string {
+	const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+	const epsg4326 = "http://www.opengis.net/def/crs/EPSG/0/4326"
+	const epsgPrefix = "http://www.opengis.net/def/crs/EPSG/0/"
+	switch {
+	case col.StorageCRS == "" || col.StorageCRS == crs84 || col.StorageCRS == epsg4326:
+		return "EPSG:4326"
+	case strings.HasPrefix(col.StorageCRS, epsgPrefix):
+		return "EPSG:" + col.StorageCRS[len(epsgPrefix):]
+	default:
+		return "EPSG:4326"
+	}
+}
+
 // geomOutputExpr returns the SQL expression that produces a GeoJSON string from the geometry column,
-// optionally re-projecting to outputCRS (an EPSG code string like "EPSG:3857"; "" = no transform).
+// optionally re-projecting from the collection's storage CRS to outputCRS (an EPSG code string like
+// "EPSG:3857"; "" means WGS84/CRS84 output).
 func geomOutputExpr(col *config.CollectionConfig, outputCRS string) string {
 	g := geomExpr(col)
-	if outputCRS == "" || !epsgRe.MatchString(outputCRS) {
+	srcEPSG := storageCRSEPSG(col)
+	dstEPSG := outputCRS
+	if dstEPSG == "" {
+		dstEPSG = "EPSG:4326"
+	}
+	if srcEPSG == dstEPSG || !epsgRe.MatchString(dstEPSG) {
 		return "ST_AsGeoJSON(" + g + ")::VARCHAR"
 	}
-	return fmt.Sprintf("ST_AsGeoJSON(ST_Transform(%s, 'EPSG:4326', '%s'))::VARCHAR", g, outputCRS)
+	return fmt.Sprintf("ST_AsGeoJSON(ST_Transform(%s, '%s', '%s'))::VARCHAR", g, srcEPSG, dstEPSG)
 }
 
 // CacheExtent stores the spatial extent of the collection. It first tries reading the `bbox`
@@ -483,33 +505,41 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	purl := parquetURL(bucket, col.ParquetKey)
 
 	g := geomExpr(col)
+	storageEPSG := storageCRSEPSG(col)
 	where := ""
 	if opts.Bbox != nil {
 		minx, miny, maxx, maxy := opts.Bbox[0], opts.Bbox[1], opts.Bbox[2], opts.Bbox[3]
+
+		// Input bbox CRS: caller supplies an EPSG code, or "" meaning CRS84 (EPSG:4326).
+		inputEPSG := "EPSG:4326"
+		if opts.BboxCRS != "" && epsgRe.MatchString(opts.BboxCRS) {
+			inputEPSG = opts.BboxCRS
+		}
+
+		// Build the envelope expression, transforming to storage CRS when needed.
+		var envExpr string
+		if inputEPSG == storageEPSG {
+			envExpr = fmt.Sprintf("ST_MakeEnvelope(%f, %f, %f, %f)", minx, miny, maxx, maxy)
+		} else {
+			envExpr = fmt.Sprintf("ST_Transform(ST_MakeEnvelope(%f, %f, %f, %f), '%s', '%s')",
+				minx, miny, maxx, maxy, inputEPSG, storageEPSG)
+		}
+
+		// Numeric bbox column predicates prune parquet row groups before the geometry check,
+		// but only when the input bbox is already in the storage CRS so the raw coords match.
 		switch {
-		case opts.BboxCRS != "" && epsgRe.MatchString(opts.BboxCRS):
-			// bbox is in a non-CRS84 CRS: transform the envelope to EPSG:4326 for the intersect check.
+		case col.BboxColsStyle == "flat" && inputEPSG == storageEPSG:
 			where = fmt.Sprintf(
-				"WHERE ST_Intersects(%s, ST_Transform(ST_MakeEnvelope(%f, %f, %f, %f), '%s', 'EPSG:4326'))",
-				g, minx, miny, maxx, maxy, opts.BboxCRS,
+				"WHERE bbox_xmin <= %f AND bbox_xmax >= %f AND bbox_ymin <= %f AND bbox_ymax >= %f AND ST_Intersects(%s, %s)",
+				maxx, minx, maxy, miny, g, envExpr,
 			)
-		case col.BboxColsStyle == "flat":
-			// Numeric bbox predicates let DuckDB prune row groups via parquet statistics
-			// before evaluating the geometry intersection (avoids unnecessary S3 range requests).
+		case col.BboxColsStyle == "struct" && inputEPSG == storageEPSG:
 			where = fmt.Sprintf(
-				"WHERE bbox_xmin <= %f AND bbox_xmax >= %f AND bbox_ymin <= %f AND bbox_ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
-				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
-			)
-		case col.BboxColsStyle == "struct":
-			where = fmt.Sprintf(
-				"WHERE bbox.xmin <= %f AND bbox.xmax >= %f AND bbox.ymin <= %f AND bbox.ymax >= %f AND ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
-				maxx, minx, maxy, miny, g, minx, miny, maxx, maxy,
+				"WHERE bbox.xmin <= %f AND bbox.xmax >= %f AND bbox.ymin <= %f AND bbox.ymax >= %f AND ST_Intersects(%s, %s)",
+				maxx, minx, maxy, miny, g, envExpr,
 			)
 		default:
-			where = fmt.Sprintf(
-				"WHERE ST_Intersects(%s, ST_MakeEnvelope(%f, %f, %f, %f))",
-				g, minx, miny, maxx, maxy,
-			)
+			where = fmt.Sprintf("WHERE ST_Intersects(%s, %s)", g, envExpr)
 		}
 	}
 
