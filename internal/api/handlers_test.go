@@ -156,7 +156,10 @@ func TestLandingPage_HTML(t *testing.T) {
 	defer srv.Close()
 	req, _ := http.NewRequest("GET", srv.URL+"/", nil)
 	req.Header.Set("Accept", "text/html")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTML request: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 for HTML, got %d", resp.StatusCode)
