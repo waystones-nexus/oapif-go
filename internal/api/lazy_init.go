@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/waystones/oapif-go/internal/auth"
 	"github.com/waystones/oapif-go/internal/config"
@@ -27,10 +28,10 @@ type SidecarFetcher func(ctx context.Context, bucket, parquetKey string) (*confi
 func LazyInitMiddleware(cfg *config.Config, secret []byte, fetchSidecar SidecarFetcher, next http.Handler) http.Handler {
 	var (
 		mu   sync.Mutex
-		done bool
+		done atomic.Bool
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !done && len(cfg.Collections) == 0 {
+		if !done.Load() {
 			if hdr := r.Header.Get("X-Waystones-OapifGo-B64"); hdr != "" {
 				if len(secret) > 0 {
 					sig := r.Header.Get("X-Waystones-OapifGo-Sig")
@@ -41,7 +42,7 @@ func LazyInitMiddleware(cfg *config.Config, secret []byte, fetchSidecar SidecarF
 					}
 				}
 				mu.Lock()
-				if !done {
+				if !done.Load() {
 					if err := config.ApplyB64(cfg, hdr); err != nil {
 						log.Printf("[lazy-init] failed to apply header config: %v", err)
 					} else {
@@ -56,7 +57,9 @@ func LazyInitMiddleware(cfg *config.Config, secret []byte, fetchSidecar SidecarF
 								db.ApplySidecar(c, sidecar)
 							}
 						}
-						done = len(cfg.Collections) > 0
+						if len(cfg.Collections) > 0 {
+							done.Store(true)
+						}
 						log.Printf("[lazy-init] configured %d collection(s) from X-Waystones-OapifGo-B64", len(cfg.Collections))
 					}
 				}

@@ -299,7 +299,7 @@ func TestParseDatetime_Instant(t *testing.T) {
 }
 
 func TestParseDatetime_ClosedInterval(t *testing.T) {
-	f, err := parseDatetime("2026-01-01/2026-06-01")
+	f, err := parseDatetime("2026-01-01T00:00:00Z/2026-06-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestParseDatetime_ClosedInterval(t *testing.T) {
 }
 
 func TestParseDatetime_OpenStart(t *testing.T) {
-	f, err := parseDatetime("../2026-06-01")
+	f, err := parseDatetime("../2026-06-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestParseDatetime_OpenStart(t *testing.T) {
 }
 
 func TestParseDatetime_OpenEnd(t *testing.T) {
-	f, err := parseDatetime("2026-01-01/..")
+	f, err := parseDatetime("2026-01-01T00:00:00Z/..")
 	if err != nil {
 		t.Fatal(err)
 	}
