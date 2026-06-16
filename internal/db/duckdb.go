@@ -80,5 +80,8 @@ func (s *Store) Close() error {
 }
 
 func parquetURL(bucket, key string) string {
+	if bucket == "" {
+		return key // bare path for local files (used in integration tests)
+	}
 	return fmt.Sprintf("s3://%s/%s", bucket, key)
 }
