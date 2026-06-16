@@ -12,6 +12,21 @@ import (
 	"github.com/waystones/oapif-go/internal/config"
 )
 
+// quoteIdent wraps a SQL identifier in double-quotes and escapes any embedded
+// double-quotes by doubling them (standard SQL identifier quoting).
+// Use this for every column name interpolated into a SQL string.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// safePURL escapes single-quotes in a parquet S3 URL before embedding it in SQL
+// string literals. A rogue ParquetKey containing a single-quote would otherwise
+// break the surrounding SQL string and enable injection.
+func safePURL(bucket, key string) string {
+	raw := parquetURL(bucket, key)
+	return strings.ReplaceAll(raw, "'", "''")
+}
+
 var epsgRe = regexp.MustCompile(`^EPSG:\d+$`)
 
 // DatetimeFilter represents a parsed OGC API datetime parameter.
@@ -38,12 +53,12 @@ type QueryOptions struct {
 	Limit      int
 	Offset     int
 	Bbox       *[4]float64
-	BboxCRS    string          // EPSG code e.g. "EPSG:3857"; "" = CRS84 (no transform)
+	BboxCRS    string // EPSG code e.g. "EPSG:3857"; "" = CRS84 (no transform)
 	Datetime   *DatetimeFilter
-	Filter     *FilterExpr     // parameterized WHERE fragment; nil = no filter
-	OutputCRS  string          // EPSG code for output geometry; "" = CRS84 (no transform)
-	SortBy     []SortField     // nil → default ORDER BY id ASC
-	Properties []string        // nil → all non-system columns
+	Filter     *FilterExpr // parameterized WHERE fragment; nil = no filter
+	OutputCRS  string      // EPSG code for output geometry; "" = CRS84 (no transform)
+	SortBy     []SortField // nil → default ORDER BY id ASC
+	Properties []string    // nil → all non-system columns
 }
 
 // DetectColumns reads the parquet schema and GeoParquet `geo` metadata to determine:
@@ -53,7 +68,7 @@ type QueryOptions struct {
 //
 // It mutates col in place; all subsequent queries use the resolved field names.
 func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig, bucket string) error {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 
 	// Read GeoParquet spec `geo` key-value metadata (parquet file footer, no row scan).
 	type geoColMeta struct {
@@ -69,7 +84,7 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 	var geo geoMeta
 	var rawGeo interface{}
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(
-		"SELECT value FROM parquet_kv_metadata('%s') WHERE key='geo'", purl,
+		"SELECT value FROM parquet_kv_metadata('%s') WHERE key='geo'", purl, //nolint:gosec — purl is single-quote-escaped
 	)).Scan(&rawGeo); err == nil {
 		var b []byte
 		switch v := rawGeo.(type) {
@@ -83,7 +98,7 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 
 	// Read parquet schema.
 	descRows, err := s.db.QueryContext(ctx, fmt.Sprintf(
-		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl,
+		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl, //nolint:gosec — purl is single-quote-escaped
 	))
 	if err != nil {
 		return err
@@ -223,7 +238,7 @@ func (s *Store) DetectColumns(ctx context.Context, col *config.CollectionConfig,
 // It is fast (no row scan) and is called after ApplySidecar so that stale sidecar values
 // (e.g. "polygon" written when WKB geometry type detection failed) are corrected.
 func (s *Store) DetectGeomType(ctx context.Context, col *config.CollectionConfig, bucket string) {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 	type geoColMeta struct {
 		GeometryTypes []string `json:"geometry_types"`
 	}
@@ -293,11 +308,12 @@ func geoParquetCRSToURI(crsJSON json.RawMessage) string {
 
 // geomExpr returns the SQL expression that produces a DuckDB GEOMETRY value from the geometry column.
 // Native GEOMETRY columns need no wrapper; WKB BLOB columns require ST_GeomFromWKB().
+// The column name is always double-quote-escaped via quoteIdent.
 func geomExpr(col *config.CollectionConfig) string {
 	if col.GeomIsNative {
-		return col.GeomColumn
+		return quoteIdent(col.GeomColumn)
 	}
-	return fmt.Sprintf("ST_GeomFromWKB(%s)", col.GeomColumn)
+	return fmt.Sprintf("ST_GeomFromWKB(%s)", quoteIdent(col.GeomColumn))
 }
 
 // storageCRSEPSG returns the EPSG code for the collection's storage CRS (e.g. "EPSG:3857").
@@ -336,7 +352,7 @@ func geomOutputExpr(col *config.CollectionConfig, outputCRS string) string {
 // array from the GeoParquet `geo` key-value metadata (instant, no row scan). Only if that
 // is absent does it fall back to a full ST_Envelope scan over all rows.
 func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, bucket string) error {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 
 	// Fast path: GeoParquet spec stores bbox in file metadata.
 	var rawGeo interface{}
@@ -414,9 +430,9 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 // CacheQueryables introspects the parquet schema and stores the field definitions.
 // Called once at startup; queryables are stored on the CollectionConfig pointer.
 func (s *Store) CacheQueryables(ctx context.Context, col *config.CollectionConfig, bucket string) error {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
-		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl,
+		"DESCRIBE SELECT * FROM read_parquet('%s') LIMIT 0", purl, //nolint:gosec — purl is single-quote-escaped
 	))
 	if err != nil {
 		return err
@@ -494,7 +510,7 @@ func (s *Store) Warmup(ctx context.Context, cols []config.CollectionConfig, buck
 		}
 		var count int64
 		err := s.db.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') LIMIT 1", parquetURL(bucket, col.ParquetKey)),
+			fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s') LIMIT 1", safePURL(bucket, col.ParquetKey)), //nolint:gosec — purl is single-quote-escaped
 		).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("warmup %s: %w", col.ID, err)
@@ -512,7 +528,7 @@ type Feature struct {
 
 // QueryItems fetches a paginated, optionally filtered list of features.
 func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bucket string, opts QueryOptions) ([]Feature, int64, error) {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 
 	g := geomExpr(col)
 	storageEPSG := storageCRSEPSG(col)
@@ -555,7 +571,7 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 
 	if opts.Datetime != nil && col.DatetimeColumn != "" {
 		dt := opts.Datetime
-		dtCol := col.DatetimeColumn
+		dtCol := quoteIdent(col.DatetimeColumn)
 		clause := ""
 		switch {
 		case dt.Exact && dt.Low != nil:
@@ -614,13 +630,13 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	if len(opts.Properties) > 0 {
 		quoted := make([]string, len(opts.Properties))
 		for i, p := range opts.Properties {
-			quoted[i] = fmt.Sprintf(`"%s"`, p)
+			quoted[i] = quoteIdent(p)
 		}
 		propClause = strings.Join(quoted, ", ")
 	} else {
 		quotedExclude := make([]string, len(excludeCols))
 		for i, c := range excludeCols {
-			quotedExclude[i] = fmt.Sprintf(`"%s"`, c)
+			quotedExclude[i] = quoteIdent(c)
 		}
 		propClause = fmt.Sprintf("* EXCLUDE (%s)", strings.Join(quotedExclude, ", "))
 	}
@@ -634,11 +650,11 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 			if sf.Desc {
 				dir = "DESC"
 			}
-			parts[i] = fmt.Sprintf(`"%s" %s`, sf.Column, dir)
+			parts[i] = quoteIdent(sf.Column) + " " + dir
 		}
 		orderBy = " ORDER BY " + strings.Join(parts, ", ")
 	} else {
-		orderBy = fmt.Sprintf(` ORDER BY "%s" ASC`, col.IDColumn)
+		orderBy = fmt.Sprintf(` ORDER BY %s ASC`, quoteIdent(col.IDColumn))
 	}
 
 	query := fmt.Sprintf(`
@@ -649,7 +665,7 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		FROM read_parquet('%s')
 		%s%s
 		LIMIT %d OFFSET %d
-	`, col.IDColumn, geomOutputExpr(col, opts.OutputCRS), propClause, purl, where, orderBy, opts.Limit, opts.Offset)
+	`, quoteIdent(col.IDColumn), geomOutputExpr(col, opts.OutputCRS), propClause, purl, where, orderBy, opts.Limit, opts.Offset)
 
 	rows, err := s.db.QueryContext(ctx, query, whereArgs...)
 	if err != nil {
@@ -690,7 +706,8 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 // featureID in ascending ID order. Either value is empty when at the boundary.
 // Only the ID column is read so this is fast even on large parquet files.
 func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConfig, bucket, featureID string) (prevID, nextID string, err error) {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
+	idQ := quoteIdent(col.IDColumn)
 	// LAG/LEAD over the ID column — DuckDB only reads that one column from parquet.
 	query := fmt.Sprintf(`
 		SELECT prev_id, next_id FROM (
@@ -701,7 +718,7 @@ func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConf
 			FROM read_parquet('%s')
 		) WHERE id = ?
 		LIMIT 1
-	`, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, purl)
+	`, idQ, idQ, idQ, idQ, idQ, purl)
 	var prev, next sql.NullString
 	if err := s.db.QueryRowContext(ctx, query, featureID).Scan(&prev, &next); err != nil {
 		return "", "", err
@@ -720,17 +737,17 @@ func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConf
 // outputCRS is an EPSG code string (e.g. "EPSG:3857") for geometry reprojection; "" = no transform.
 // properties is an optional list of property names to include; nil returns all non-system columns.
 func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, bucket, featureID, outputCRS string, properties []string) (*Feature, error) {
-	purl := parquetURL(bucket, col.ParquetKey)
+	purl := safePURL(bucket, col.ParquetKey)
 
 	var propClause string
 	if len(properties) > 0 {
 		quoted := make([]string, len(properties))
 		for i, p := range properties {
-			quoted[i] = fmt.Sprintf(`"%s"`, p)
+			quoted[i] = quoteIdent(p)
 		}
 		propClause = strings.Join(quoted, ", ")
 	} else {
-		propClause = fmt.Sprintf(`* EXCLUDE ("%s", "%s")`, col.GeomColumn, col.IDColumn)
+		propClause = fmt.Sprintf(`* EXCLUDE (%s, %s)`, quoteIdent(col.GeomColumn), quoteIdent(col.IDColumn))
 	}
 
 	query := fmt.Sprintf(`
@@ -741,7 +758,7 @@ func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, buc
 		FROM read_parquet('%s')
 		WHERE CAST(%s AS VARCHAR) = ?
 		LIMIT 1
-	`, col.IDColumn, geomOutputExpr(col, outputCRS), propClause, purl, col.IDColumn)
+	`, quoteIdent(col.IDColumn), geomOutputExpr(col, outputCRS), propClause, purl, quoteIdent(col.IDColumn))
 
 	rows, err := s.db.QueryContext(ctx, query, featureID)
 	if err != nil {

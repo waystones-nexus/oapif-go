@@ -46,22 +46,28 @@ func Open(ctx context.Context) (*Store, error) {
 // ConfigureS3 creates a DuckDB S3 secret for any S3-compatible store.
 // Works with AWS S3, Cloudflare R2, MinIO, or any other S3-compatible endpoint.
 // Secrets are database-scoped in DuckDB so one call is sufficient.
+//
+// Credential values are single-quote-escaped before SQL interpolation to prevent
+// malformed SQL if a key or secret contains a quote character.
 func (s *Store) ConfigureS3(ctx context.Context, cfg *config.Config) error {
 	if cfg.S3AccessKey == "" {
 		return nil
 	}
 
+	// escSQ escapes a value for embedding in a SQL single-quoted string literal.
+	escSQ := func(v string) string { return strings.ReplaceAll(v, "'", "''") }
+
 	var sb strings.Builder
 	sb.WriteString("CREATE OR REPLACE SECRET s3creds (\n\tTYPE s3,\n")
-	fmt.Fprintf(&sb, "\tKEY_ID '%s',\n", cfg.S3AccessKey)
-	fmt.Fprintf(&sb, "\tSECRET '%s',\n", cfg.S3SecretKey)
-	fmt.Fprintf(&sb, "\tREGION '%s'", cfg.S3Region)
+	fmt.Fprintf(&sb, "\tKEY_ID '%s',\n", escSQ(cfg.S3AccessKey))
+	fmt.Fprintf(&sb, "\tSECRET '%s',\n", escSQ(cfg.S3SecretKey))
+	fmt.Fprintf(&sb, "\tREGION '%s'", escSQ(cfg.S3Region))
 
 	if cfg.S3Host != "" {
-		fmt.Fprintf(&sb, ",\n\tENDPOINT '%s'", cfg.S3Host)
+		fmt.Fprintf(&sb, ",\n\tENDPOINT '%s'", escSQ(cfg.S3Host))
 	}
 	if cfg.S3URLStyle != "" {
-		fmt.Fprintf(&sb, ",\n\tURL_STYLE '%s'", cfg.S3URLStyle)
+		fmt.Fprintf(&sb, ",\n\tURL_STYLE '%s'", escSQ(cfg.S3URLStyle))
 	}
 	sb.WriteString("\n)")
 

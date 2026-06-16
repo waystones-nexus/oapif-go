@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -152,7 +156,16 @@ func logStartup(format string, args ...interface{}) {
 // the server started with 0 collections. Sidecars are loaded via the S3 client
 // directly (no DuckDB required). Collections without a sidecar will work with
 // config defaults; extent/queryables won't be cached in this path.
+//
+// Security (Option C — HMAC signing):
+// When LAZY_INIT_SECRET is set, the header is only accepted when accompanied by
+// a matching X-Waystones-OapifGo-Sig header containing the HMAC-SHA256 hex
+// digest of the B64 payload, keyed with LAZY_INIT_SECRET.
+// The waystones-cloud proxy sets this signature before forwarding.
+// When LAZY_INIT_SECRET is unset (self-hosted / local dev), the signature check
+// is skipped for backward compatibility.
 func lazyInitMiddleware(cfg *config.Config, s3c *s3.Client, next http.Handler) http.Handler {
+	secret := []byte(os.Getenv("LAZY_INIT_SECRET"))
 	var (
 		mu   sync.Mutex
 		done bool
@@ -160,6 +173,15 @@ func lazyInitMiddleware(cfg *config.Config, s3c *s3.Client, next http.Handler) h
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !done && len(cfg.Collections) == 0 {
 			if hdr := r.Header.Get("X-Waystones-OapifGo-B64"); hdr != "" {
+				// Verify HMAC signature when a secret is configured.
+				if len(secret) > 0 {
+					sig := r.Header.Get("X-Waystones-OapifGo-Sig")
+					if !verifyHMAC(secret, hdr, sig) {
+						log.Printf("[lazy-init] rejected: invalid or missing HMAC signature")
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
 				mu.Lock()
 				if !done {
 					if err := config.ApplyB64(cfg, hdr); err != nil {
@@ -185,4 +207,16 @@ func lazyInitMiddleware(cfg *config.Config, s3c *s3.Client, next http.Handler) h
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// verifyHMAC returns true when sig is the correct HMAC-SHA256 hex digest of
+// payload keyed with secret. Uses hmac.Equal for constant-time comparison.
+func verifyHMAC(secret []byte, payload, sig string) bool {
+	if sig == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(payload)) //nolint:errcheck — hmac.Hash.Write never returns an error
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(sig), []byte(expected))
 }
