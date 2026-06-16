@@ -15,7 +15,7 @@ func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			// Security headers — applied to every response from this server.
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com https://cdn.jsdelivr.net; connect-src 'self' https:; worker-src 'self' blob:;")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com https://cdn.jsdelivr.net https://fonts.gstatic.com; connect-src 'self' https:; worker-src 'self' blob:;")
 
 			origin := r.Header.Get("Origin")
 			var allow string
