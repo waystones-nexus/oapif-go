@@ -524,8 +524,11 @@ func TestConditional_ETagMatch(t *testing.T) {
 	// Second request with If-None-Match
 	req, _ := http.NewRequest("GET", srv.URL+"/collections", nil)
 	req.Header.Set("If-None-Match", etag)
-	resp2, _ := http.DefaultClient.Do(req)
-	resp2.Body.Close()
+	resp2, err2 := http.DefaultClient.Do(req)
+	if err2 != nil {
+		t.Fatalf("second request: %v", err2)
+	}
+	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusNotModified {
 		t.Errorf("expected 304, got %d", resp2.StatusCode)
 	}
