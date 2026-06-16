@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/waystones/oapif-go/internal/config"
 )
+
+var epsgRe = regexp.MustCompile(`^EPSG:\d+$`)
 
 // DatetimeFilter represents a parsed OGC API datetime parameter.
 type DatetimeFilter struct {
@@ -301,7 +304,7 @@ func geomExpr(col *config.CollectionConfig) string {
 // optionally re-projecting to outputCRS (an EPSG code string like "EPSG:3857"; "" = no transform).
 func geomOutputExpr(col *config.CollectionConfig, outputCRS string) string {
 	g := geomExpr(col)
-	if outputCRS == "" {
+	if outputCRS == "" || !epsgRe.MatchString(outputCRS) {
 		return "ST_AsGeoJSON(" + g + ")::VARCHAR"
 	}
 	return fmt.Sprintf("ST_AsGeoJSON(ST_Transform(%s, 'EPSG:4326', '%s'))::VARCHAR", g, outputCRS)
@@ -484,7 +487,7 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 	if opts.Bbox != nil {
 		minx, miny, maxx, maxy := opts.Bbox[0], opts.Bbox[1], opts.Bbox[2], opts.Bbox[3]
 		switch {
-		case opts.BboxCRS != "":
+		case opts.BboxCRS != "" && epsgRe.MatchString(opts.BboxCRS):
 			// bbox is in a non-CRS84 CRS: transform the envelope to EPSG:4326 for the intersect check.
 			where = fmt.Sprintf(
 				"WHERE ST_Intersects(%s, ST_Transform(ST_MakeEnvelope(%f, %f, %f, %f), '%s', 'EPSG:4326'))",
@@ -652,12 +655,11 @@ func (s *Store) QueryAdjacentIDs(ctx context.Context, col *config.CollectionConf
 				CAST(LAG(%s) OVER (ORDER BY %s) AS VARCHAR) AS prev_id,
 				CAST(LEAD(%s) OVER (ORDER BY %s) AS VARCHAR) AS next_id
 			FROM read_parquet('%s')
-		) WHERE id = '%s'
+		) WHERE id = ?
 		LIMIT 1
-	`, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn,
-		purl, strings.ReplaceAll(featureID, "'", "''"))
+	`, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, col.IDColumn, purl)
 	var prev, next sql.NullString
-	if err := s.db.QueryRowContext(ctx, query).Scan(&prev, &next); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, featureID).Scan(&prev, &next); err != nil {
 		return "", "", err
 	}
 	if prev.Valid {
@@ -693,11 +695,11 @@ func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, buc
 			%s AS geometry,
 			%s
 		FROM read_parquet('%s')
-		WHERE CAST(%s AS VARCHAR) = '%s'
+		WHERE CAST(%s AS VARCHAR) = ?
 		LIMIT 1
-	`, col.IDColumn, geomOutputExpr(col, outputCRS), propClause, purl, col.IDColumn, featureID)
+	`, col.IDColumn, geomOutputExpr(col, outputCRS), propClause, purl, col.IDColumn)
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, featureID)
 	if err != nil {
 		return nil, err
 	}
