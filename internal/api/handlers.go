@@ -219,8 +219,8 @@ func coerceValue(typ, s string) (interface{}, error) {
 
 type Handler struct {
 	cfg          *config.Config
-	store        *db.Store     // nil until SetDB is called
-	dbReady      chan struct{} // closed by SetDB when store is set and DuckDB is ready
+	store        db.Querier    // nil until SetDB or SetQuerier is called
+	dbReady      chan struct{}  // closed by SetDB when store is set and DuckDB is ready
 	startTime    time.Time
 	ttfbOnce     sync.Once
 	openapiMu    sync.RWMutex
@@ -240,6 +240,13 @@ func (h *Handler) SetDB(store *db.Store) {
 	}
 	h.store = store // happens-before close(h.dbReady) per Go memory model
 	close(h.dbReady)
+}
+
+// SetQuerier injects a Querier without triggering DetectGeomType or closing dbReady.
+// The caller is responsible for closing dbReady before serving requests.
+// Intended for use in tests only.
+func (h *Handler) SetQuerier(q db.Querier) {
+	h.store = q
 }
 
 // waitForDB blocks until DuckDB is ready or the context/timeout expires.
