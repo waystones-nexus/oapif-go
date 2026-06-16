@@ -363,10 +363,14 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 		}
 	}
 
+	srcEPSG := storageCRSEPSG(col)
+
 	// Medium path: aggregate the pre-computed bbox columns using parquet column statistics.
 	// DuckDB resolves MIN/MAX over simple numeric columns from parquet row-group stats
 	// without reading row data, making this nearly as fast as the metadata path.
-	if col.BboxColsStyle == "flat" {
+	// Only usable when storage is WGS84 — bbox columns are in the storage CRS and we have
+	// no way to transform scalar aggregates without a full geometry scan anyway.
+	if col.BboxColsStyle == "flat" && srcEPSG == "EPSG:4326" {
 		var minX, minY, maxX, maxY sql.NullFloat64
 		err := s.db.QueryRowContext(ctx, fmt.Sprintf(
 			"SELECT MIN(bbox_xmin), MIN(bbox_ymin), MAX(bbox_xmax), MAX(bbox_ymax) FROM read_parquet('%s')", purl,
@@ -377,8 +381,14 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 		}
 	}
 
-	// Slow path: full geometry scan for files without GeoParquet metadata or bbox columns.
+	// Slow path: full geometry scan. Transform to WGS84 when the storage CRS differs.
 	g := geomExpr(col)
+	var geomForExtent string
+	if srcEPSG == "EPSG:4326" {
+		geomForExtent = g
+	} else {
+		geomForExtent = fmt.Sprintf("ST_Transform(%s, '%s', 'EPSG:4326')", g, srcEPSG)
+	}
 	query := fmt.Sprintf(`
 		SELECT
 			MIN(ST_XMin(ST_Envelope(%s))),
@@ -386,7 +396,7 @@ func (s *Store) CacheExtent(ctx context.Context, col *config.CollectionConfig, b
 			MAX(ST_XMax(ST_Envelope(%s))),
 			MAX(ST_YMax(ST_Envelope(%s)))
 		FROM read_parquet('%s')
-	`, g, g, g, g, purl)
+	`, geomForExtent, geomForExtent, geomForExtent, geomForExtent, purl)
 
 	row := s.db.QueryRowContext(ctx, query)
 	var minX, minY, maxX, maxY sql.NullFloat64
@@ -608,7 +618,11 @@ func (s *Store) QueryItems(ctx context.Context, col *config.CollectionConfig, bu
 		}
 		propClause = strings.Join(quoted, ", ")
 	} else {
-		propClause = fmt.Sprintf("* EXCLUDE (%s)", strings.Join(excludeCols, ", "))
+		quotedExclude := make([]string, len(excludeCols))
+		for i, c := range excludeCols {
+			quotedExclude[i] = fmt.Sprintf(`"%s"`, c)
+		}
+		propClause = fmt.Sprintf("* EXCLUDE (%s)", strings.Join(quotedExclude, ", "))
 	}
 
 	// ORDER BY: explicit sortby or default to id ASC for deterministic pagination.
@@ -716,7 +730,7 @@ func (s *Store) QueryItem(ctx context.Context, col *config.CollectionConfig, buc
 		}
 		propClause = strings.Join(quoted, ", ")
 	} else {
-		propClause = fmt.Sprintf("* EXCLUDE (%s, %s)", col.GeomColumn, col.IDColumn)
+		propClause = fmt.Sprintf(`* EXCLUDE ("%s", "%s")`, col.GeomColumn, col.IDColumn)
 	}
 
 	query := fmt.Sprintf(`
