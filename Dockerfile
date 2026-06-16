@@ -1,5 +1,5 @@
 # ── Stage 0: Caddy binary (for the gateway target only) ───────────────────
-FROM caddy:latest AS caddy-bin
+FROM caddy:2.10.0-alpine AS caddy-bin
 
 # ── Stage 1: Build Go binary ───────────────────────────────────────────────
 FROM golang:1.24-bookworm AS builder
@@ -53,12 +53,21 @@ COPY --from=extensions /extensions /extensions
 
 ENV DUCKDB_EXTENSION_DIR=/extensions
 
+# Run as a non-root user — reduces container breakout blast radius.
+RUN adduser --disabled-password --gecos '' --uid 1001 app
+USER app
+
 EXPOSE 5000
 CMD ["/server"]
 
 # ── Stage 3b: gateway — OSS / self-hosted (Caddy TLS sidecar) ─────────────
 FROM minimal AS gateway
 
+# Switch back to root: Caddy binds port 443 which requires root or
+# CAP_NET_BIND_SERVICE on most Linux kernels. The non-root security gain
+# is in the minimal (Cloudflare Containers) target where no privileged
+# port is needed and the Go binary runs as UID 1001.
+USER root
 COPY --from=caddy-bin /usr/bin/caddy /usr/bin/caddy
 COPY boot.sh /boot.sh
 COPY Caddyfile /Caddyfile

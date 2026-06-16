@@ -12,6 +12,11 @@ import (
 func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Security headers — applied to every response from this server.
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'")
+
 			origin := r.Header.Get("Origin")
 			var allow string
 			if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
@@ -102,8 +107,8 @@ type gzipBuf struct {
 	code int
 }
 
-func (g *gzipBuf) WriteHeader(code int)           { g.code = code }
-func (g *gzipBuf) Write(b []byte) (int, error)    { return g.buf.Write(b) }
+func (g *gzipBuf) WriteHeader(code int)        { g.code = code }
+func (g *gzipBuf) Write(b []byte) (int, error) { return g.buf.Write(b) }
 
 // FParamMiddleware maps the OGC ?f= format parameter to an Accept header so
 // all downstream handlers can use r.Header.Get("Accept") uniformly.

@@ -1,10 +1,25 @@
 http://:5000 {
-    # Health check — no auth, no cache headers.
+    # Health check — no auth, no cache headers, no rate limiting.
     handle /health {
         reverse_proxy localhost:{$CONTAINER_PORT}
     }
 
     route {
+        # Rate limiting — 100 requests per 10 s per client IP.
+        # Requires a custom Caddy build with the caddy-ratelimit module:
+        #   github.com/mholt/caddy-ratelimit
+        # The standard caddy image does NOT include it; uncomment only when using
+        # a custom build. For Cloudflare Containers deployments, use Cloudflare's
+        # built-in rate limiting rules instead.
+        #
+        # rate_limit {
+        #     zone oapif {
+        #         key {remote_host}
+        #         events 100
+        #         window 10s
+        #     }
+        # }
+
         # Private deployment guard: require X-API-Key unless IS_PRIVATE is explicitly "0".
         # Fail-closed: missing IS_PRIVATE denies access.
         # CADDY_API_KEYS_REGEX is a "|"-joined alternation of hex keys;

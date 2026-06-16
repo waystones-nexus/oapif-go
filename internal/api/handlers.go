@@ -218,15 +218,15 @@ func coerceValue(typ, s string) (interface{}, error) {
 }
 
 type Handler struct {
-	cfg         *config.Config
-	store       *db.Store    // nil until SetDB is called
-	dbReady     chan struct{} // closed by SetDB when store is set and DuckDB is ready
-	startTime   time.Time
-	ttfbOnce    sync.Once
-	openapiMu   sync.RWMutex
-	openapiJSON []byte
+	cfg          *config.Config
+	store        *db.Store     // nil until SetDB is called
+	dbReady      chan struct{} // closed by SetDB when store is set and DuckDB is ready
+	startTime    time.Time
+	ttfbOnce     sync.Once
+	openapiMu    sync.RWMutex
+	openapiJSON  []byte
 	openapiNCols int // number of collections when openapiJSON was last built
-	tmpls       *template.Template
+	tmpls        *template.Template
 }
 
 // SetDB sets the DuckDB store, fixes up geometry types from GeoParquet metadata for
@@ -639,6 +639,16 @@ func (h *Handler) Items(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := clampInt(parseIntParam(q.Get("limit"), 10), 1, 1000)
 	offset := clampInt(parseIntParam(q.Get("offset"), 0), 0, -1)
+
+	// Enforce a 4 KB cap on variable-length parameters to prevent the CQL2 parser
+	// and other routines from consuming excessive memory on crafted inputs.
+	const maxParamLen = 4096
+	for _, paramName := range []string{"filter", "bbox", "datetime", "sortby", "properties"} {
+		if val := q.Get(paramName); len(val) > maxParamLen {
+			InvalidParameter(w, paramName, "parameter value exceeds maximum length of 4096 bytes")
+			return
+		}
+	}
 
 	var bbox *[4]float64
 	if bboxStr := q.Get("bbox"); bboxStr != "" {
