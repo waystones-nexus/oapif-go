@@ -20,18 +20,18 @@ http://:5000 {
         #     }
         # }
 
-        # Private deployment guard: require X-API-Key unless IS_PRIVATE is explicitly "0".
+        # Private deployment guard: require Authorization: ApiKey <key> unless IS_PRIVATE is explicitly "0".
         # Fail-closed: missing IS_PRIVATE denies access.
         # CADDY_API_KEYS_REGEX is a "|"-joined alternation of hex keys;
         # "__no_active_keys__" sentinel rejects all keys until one is created.
         @privateNoHeader {
             expression `"{$IS_PRIVATE}" != "0"`
-            not header X-API-Key *
+            not header Authorization *
         }
         @privateBadHeader {
             expression `"{$IS_PRIVATE}" != "0"`
-            header X-API-Key *
-            not header_regexp X-API-Key ^({$CADDY_API_KEYS_REGEX})$
+            header Authorization *
+            not header_regexp Authorization ^ApiKey ({$CADDY_API_KEYS_REGEX})$
         }
         respond @privateNoHeader "Unauthorized" 401
         respond @privateBadHeader "Unauthorized" 401
