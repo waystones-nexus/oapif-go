@@ -32,7 +32,7 @@ func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			if allow != "" {
 				w.Header().Set("Access-Control-Allow-Origin", allow)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Api-Key")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization")
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
 			if r.Method == http.MethodOptions {
