@@ -43,18 +43,13 @@ func Open(ctx context.Context) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// ConfigureS3 creates a DuckDB S3 secret for any S3-compatible store.
-// Works with AWS S3, Cloudflare R2, MinIO, or any other S3-compatible endpoint.
-// Secrets are database-scoped in DuckDB so one call is sufficient.
+// buildS3SecretSQL builds the CREATE SECRET statement ConfigureS3 executes.
+// Split out from ConfigureS3 so the generated SQL — in particular, whether
+// USE_SSL ends up in it — is unit-testable without a live DuckDB connection.
 //
 // Credential values are single-quote-escaped before SQL interpolation to prevent
 // malformed SQL if a key or secret contains a quote character.
-func (s *Store) ConfigureS3(ctx context.Context, cfg *config.Config) error {
-	if cfg.S3AccessKey == "" {
-		return nil
-	}
-
-	// escSQ escapes a value for embedding in a SQL single-quoted string literal.
+func buildS3SecretSQL(cfg *config.Config) string {
 	escSQ := func(v string) string { return strings.ReplaceAll(v, "'", "''") }
 
 	var sb strings.Builder
@@ -65,13 +60,29 @@ func (s *Store) ConfigureS3(ctx context.Context, cfg *config.Config) error {
 
 	if cfg.S3Host != "" {
 		fmt.Fprintf(&sb, ",\n\tENDPOINT '%s'", escSQ(cfg.S3Host))
+		// DuckDB's S3 secret defaults USE_SSL to true when this parameter is
+		// omitted — every query against a plain-HTTP endpoint (the local MinIO
+		// instance every docker-compose/Codespaces kit runs,
+		// AWS_ENDPOINT_URL=http://minio:9000) then fails at the TLS layer,
+		// surfaced by handlers.go as nothing more specific than a generic
+		// "query failed", indistinguishable from a real query bug.
+		fmt.Fprintf(&sb, ",\n\tUSE_SSL %t", cfg.S3UseSSL)
 	}
 	if cfg.S3URLStyle != "" {
 		fmt.Fprintf(&sb, ",\n\tURL_STYLE '%s'", escSQ(cfg.S3URLStyle))
 	}
 	sb.WriteString("\n)")
+	return sb.String()
+}
 
-	_, err := s.db.ExecContext(ctx, sb.String())
+// ConfigureS3 creates a DuckDB S3 secret for any S3-compatible store.
+// Works with AWS S3, Cloudflare R2, MinIO, or any other S3-compatible endpoint.
+// Secrets are database-scoped in DuckDB so one call is sufficient.
+func (s *Store) ConfigureS3(ctx context.Context, cfg *config.Config) error {
+	if cfg.S3AccessKey == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, buildS3SecretSQL(cfg))
 	return err
 }
 

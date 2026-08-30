@@ -146,3 +146,58 @@ func TestCollectionByID_Empty(t *testing.T) {
 		t.Error("expected nil for empty collection list")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Load: S3 endpoint scheme -> S3Host / S3UseSSL
+//
+// DuckDB's S3 secret defaults USE_SSL to true when the parameter is omitted.
+// Every query against a plain-HTTP endpoint (the local MinIO instance every
+// docker-compose/Codespaces kit runs, AWS_ENDPOINT_URL=http://minio:9000) then
+// fails at the TLS layer — surfaced by handlers.go as nothing more specific
+// than a generic "query failed", indistinguishable from a real query bug.
+// ---------------------------------------------------------------------------
+
+func clearS3Env(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"S3_ENDPOINT", "AWS_ENDPOINT_URL", "R2_ENDPOINT", "S3_REGION", "S3_URL_STYLE"} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestLoad_HTTPEndpointDisablesSSL(t *testing.T) {
+	clearS3Env(t)
+	t.Setenv("AWS_ENDPOINT_URL", "http://minio:9000")
+
+	cfg := config.Load()
+
+	if cfg.S3Host != "minio:9000" {
+		t.Errorf("S3Host = %q, want %q", cfg.S3Host, "minio:9000")
+	}
+	if cfg.S3UseSSL {
+		t.Error("S3UseSSL = true for an http:// endpoint, want false")
+	}
+}
+
+func TestLoad_HTTPSEndpointKeepsSSLEnabled(t *testing.T) {
+	clearS3Env(t)
+	t.Setenv("AWS_ENDPOINT_URL", "https://abc123.r2.cloudflarestorage.com")
+
+	cfg := config.Load()
+
+	if !cfg.S3UseSSL {
+		t.Error("S3UseSSL = false for an https:// endpoint, want true")
+	}
+}
+
+func TestLoad_NoEndpointKeepsSSLEnabled(t *testing.T) {
+	clearS3Env(t)
+
+	cfg := config.Load()
+
+	if cfg.S3Host != "" {
+		t.Errorf("S3Host = %q, want empty (plain AWS S3, no custom endpoint)", cfg.S3Host)
+	}
+	if !cfg.S3UseSSL {
+		t.Error("S3UseSSL = false with no custom endpoint set, want true (matches DuckDB's own default)")
+	}
+}

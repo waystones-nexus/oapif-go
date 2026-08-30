@@ -115,6 +115,7 @@ type Config struct {
 	// set to the full URL for R2, MinIO, or any other S3-compatible store.
 	S3Endpoint  string // e.g. https://<id>.r2.cloudflarestorage.com  (optional)
 	S3Host      string // host extracted from S3Endpoint, used by DuckDB
+	S3UseSSL    bool   // false only when S3Endpoint's scheme is literally "http"
 	S3AccessKey string
 	S3SecretKey string
 	S3Bucket    string
@@ -308,10 +309,20 @@ func Load() *Config {
 		cfg.ServerKeywords = strings.Split(kw, ",")
 	}
 
-	// Extract hostname for DuckDB's endpoint parameter (no scheme).
+	// Extract hostname for DuckDB's endpoint parameter (no scheme), and derive
+	// USE_SSL from that same scheme. DuckDB's S3 secret defaults USE_SSL to true
+	// (HTTPS) when the parameter is omitted — every query against a plain-HTTP
+	// endpoint (AWS_ENDPOINT_URL=http://minio:9000, the local MinIO instance every
+	// docker-compose/Codespaces kit uses) then fails at the TLS layer, and that
+	// failure surfaces through handlers.go as nothing more specific than a generic
+	// "query failed" — indistinguishable from a real query bug.
+	cfg.S3UseSSL = true
 	if cfg.S3Endpoint != "" {
 		if u, err := url.Parse(cfg.S3Endpoint); err == nil {
 			cfg.S3Host = u.Host
+			if u.Scheme == "http" {
+				cfg.S3UseSSL = false
+			}
 		}
 	}
 
