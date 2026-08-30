@@ -127,6 +127,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  push-to-ghcr-minimal:
+    # A second, distinctly-tagged image from the `minimal` target (no Caddy/TLS layer) —
+    # used by contexts that already get HTTPS termination from something in front of them
+    # (e.g. GitHub Codespaces' own port forwarding), where the `gateway` target's TLS
+    # termination and CONTAINER_PORT indirection would just be redundant overhead.
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push minimal image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: minimal
+          push: true
+          tags: |
+            ghcr.io/waystones-nexus/oapif-go:minimal-latest
+            ghcr.io/waystones-nexus/oapif-go:minimal-${{ github.sha }}
+          build-args: |
+            DUCKDB_VERSION=v1.5.3
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   push-to-cloudflare:
     runs-on: ubuntu-latest
     needs: build-and-test
