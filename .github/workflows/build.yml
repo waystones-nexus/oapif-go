@@ -179,9 +179,9 @@ jobs:
         id: image
         run: |
           if [[ "${{ github.ref }}" == refs/heads/main ]]; then
-            echo "name=waystones-keystone-oapifgo:2026-10-23a" >> $GITHUB_OUTPUT
+            echo "name=waystones-keystone-oapifgo:2026-10-23b" >> $GITHUB_OUTPUT
           else
-            echo "name=waystones-shard-oapifgo:2026-10-23a" >> $GITHUB_OUTPUT
+            echo "name=waystones-shard-oapifgo:2026-10-23b" >> $GITHUB_OUTPUT
           fi
 
       - uses: docker/setup-buildx-action@v3

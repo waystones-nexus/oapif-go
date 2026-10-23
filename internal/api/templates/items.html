@@ -619,14 +619,18 @@ function addFilterRow(prop,op,val){
   opSel.onchange=syncVal; if(op)syncVal();
 }
 
+// Mirrors the CQL2 identifier rule in internal/cql2/parser.go; anything else is double-quoted.
+function cqlIdent(p){return /^[\p{L}_:][\p{L}\p{N}_:.]*$/u.test(p)?p:'"'+p+'"';}
+
 function buildCQL2(){
   var parts=[];
   Array.from(filterRowsEl.children).forEach(function(row){
     var prop=row.querySelector('.prop-sel').value,op=row.querySelector('.op-sel').value,val=row.querySelector('.val-inp').value;
     if(!prop)return;
+    var q=queryables[prop],typ=q?q.type:'string';
+    prop=cqlIdent(prop);
     if(op==='IS NULL'||op==='IS NOT NULL'){parts.push(prop+' '+op);return;}
     if(!val)return;
-    var q=queryables[prop],typ=q?q.type:'string';
     if(typ==='integer'||typ==='number'){parts.push(prop+' '+op+' '+val);}
     else{parts.push(prop+' '+op+" '"+val.replace(/'/g,"''")+"'");}
   });
@@ -647,8 +651,8 @@ function clearFilters(){
 (function(){
   var urlFilter=new URL(window.location.href).searchParams.get('filter');
   if(!urlFilter)return;
-  var re=/(\w+)\s+(IS NOT NULL|IS NULL|>=|<=|<>|LIKE|>|<|=)\s*(?:'([^']*)'|([\S]+))?/gi,m,rows=[];
-  while((m=re.exec(urlFilter))!==null)rows.push({prop:m[1],op:m[2].toUpperCase(),val:m[3]!==undefined?m[3]:(m[4]||'')});
+  var re=/(?:"([^"]+)"|([\p{L}_:][\p{L}\p{N}_:.]*))\s+(IS NOT NULL|IS NULL|>=|<=|<>|LIKE|>|<|=)\s*(?:'([^']*)'|([\S]+))?/giu,m,rows=[];
+  while((m=re.exec(urlFilter))!==null)rows.push({prop:m[1]!==undefined?m[1]:m[2],op:m[3].toUpperCase(),val:m[4]!==undefined?m[4]:(m[5]||'')});
   if(rows.length>0){panelOpen=true;filterPanel.style.display='';filterToggle.textContent='Filter ▴';pendingRows=rows;loadQueryables();}
 })();
 
