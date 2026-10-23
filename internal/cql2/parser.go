@@ -129,10 +129,12 @@ func tokenize(input string) ([]token, error) {
 			continue
 		}
 
-		// Identifiers / keywords
-		if unicode.IsLetter(ch) || ch == '_' {
+		// Identifiers / keywords. Per the CQL2 BNF, ':' may start an identifier
+		// and '.' may appear after the first character (e.g. OSM-style
+		// "socket:type2_combo" or "addr.street").
+		if unicode.IsLetter(ch) || ch == '_' || ch == ':' {
 			j := i
-			for j < n && (unicode.IsLetter(runes[j]) || unicode.IsDigit(runes[j]) || runes[j] == '_') {
+			for j < n && (unicode.IsLetter(runes[j]) || unicode.IsDigit(runes[j]) || runes[j] == '_' || runes[j] == ':' || runes[j] == '.') {
 				j++
 			}
 			tokens = append(tokens, token{kind: tokIdent, value: string(runes[i:j])})

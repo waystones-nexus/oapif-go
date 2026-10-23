@@ -324,3 +324,28 @@ func TestJSONInvalidOp(t *testing.T) {
 		t.Error("expected error for unknown op")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Identifiers containing ':' and '.' (CQL2 BNF identifierStart/identifierPart)
+// ---------------------------------------------------------------------------
+
+func TestIdentWithColonAndDot(t *testing.T) {
+	ctx := testContext()
+	ctx.Queryables["socket:type2_combo"] = config.QueryableField{Type: "string"}
+	ctx.Queryables["addr.street"] = config.QueryableField{Type: "string"}
+
+	cases := map[string]string{
+		`socket:type2_combo LIKE '200'`: `"socket:type2_combo" LIKE ?`,
+		`addr.street = 'Main'`:          `"addr.street" = ?`,
+		`"socket:type2_combo" = '2'`:    `"socket:type2_combo" = ?`,
+	}
+	for input, want := range cases {
+		sql, _, err := cql2.Translate(mustParse(t, input), ctx)
+		if err != nil {
+			t.Fatalf("Translate(%q): %v", input, err)
+		}
+		if sql != want {
+			t.Errorf("%q: sql = %q, want %q", input, sql, want)
+		}
+	}
+}
